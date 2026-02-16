@@ -12,7 +12,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
-const HEARTBEAT_TIMEOUT = 600000; // 10 min timeout — agents can take time researching
+const HEARTBEAT_TIMEOUT = 3600000; // 60 min — agents spend long periods researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
 // ============================================================
@@ -256,7 +256,12 @@ app.post('/api/v1/agents/register', async (req, res) => {
 app.post('/api/v1/agents/:id/findings', async (req, res) => {
   try {
     const agent = await db.getAgent(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) return res.status(404).json({ error: 'Agent not found. Re-register at POST /agents/register' });
+
+    // Re-activate agent if it was timed out — it's clearly still working
+    if (agent.status !== 'active') {
+      await db.updateAgent(agent.id, { status: 'active', last_heartbeat: new Date().toISOString() });
+    }
 
     const { title, summary, citations, confidence, contradictions, gaps, papersAnalyzed } = req.body;
     if (!title || !summary) return res.status(400).json({ error: 'title and summary required' });
@@ -287,8 +292,9 @@ app.post('/api/v1/agents/:id/findings', async (req, res) => {
       await db.completeTask(agent.current_task_id);
     }
 
-    // Update agent stats
+    // Update agent stats — always re-activate
     await db.updateAgent(agent.id, {
+      status: 'active',
       tasks_completed: (agent.tasks_completed || 0) + 1,
       papers_analyzed: (agent.papers_analyzed || 0) + (papersAnalyzed || cits.length),
       last_heartbeat: new Date().toISOString(),
@@ -342,9 +348,28 @@ app.post('/api/v1/agents/:id/findings', async (req, res) => {
 app.post('/api/v1/agents/:id/heartbeat', async (req, res) => {
   try {
     const agent = await db.getAgent(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    await db.updateAgent(agent.id, { last_heartbeat: new Date().toISOString() });
-    res.json({ status: 'ok', agentId: agent.id });
+    if (!agent) return res.status(404).json({ error: 'Agent not found. Re-register at POST /agents/register' });
+
+    const updates = { last_heartbeat: new Date().toISOString() };
+
+    // Re-activate if it was timed out
+    if (agent.status !== 'active') {
+      updates.status = 'active';
+      // Task was released — assign a new one
+      const mission = await db.getActiveMission();
+      if (mission) {
+        const task = await db.findBestTask(mission.id);
+        if (task) {
+          await db.assignTask(task.id, agent.id);
+          updates.current_task_id = task.id;
+          updates.division_id = task.division_id;
+          updates.queue_id = task.queue_id;
+        }
+      }
+    }
+
+    await db.updateAgent(agent.id, updates);
+    res.json({ status: 'ok', agentId: agent.id, active: true });
   } catch (e) { res.status(500).json({ error: 'Heartbeat failed' }); }
 });
 
