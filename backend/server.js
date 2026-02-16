@@ -1,0 +1,651 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const { v4: uuid } = require('uuid');
+const { initDB, db } = require('./db');
+const { getAllMissions } = require('./missions');
+const fs = require('fs');
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '5mb' }));
+app.use(express.static(path.join(__dirname, '..', 'frontend')));
+
+const PORT = process.env.PORT || 3000;
+const HEARTBEAT_TIMEOUT = 120000; // 2 min timeout
+const SKILL_PATH = path.join(__dirname, 'SKILL.md');
+
+// ============================================================
+// STARTUP — Initialize DB and seed missions
+// ============================================================
+async function startup() {
+  await initDB();
+  console.log('🧬 Seeding missions...');
+  const missions = getAllMissions();
+  let totalTasks = 0;
+  for (const m of missions) {
+    const existing = await db.getMission(m.id);
+    if (!existing) {
+      await db.upsertMission(m);
+      console.log(`  → Seeding ${m.name}: ${m.tasks.length} tasks...`);
+      await db.insertTasks(m.tasks);
+      totalTasks += m.tasks.length;
+      console.log(`  ✅ ${m.name} seeded`);
+    } else {
+      console.log(`  → ${m.name} already exists (${existing.total_tasks} tasks)`);
+      totalTasks += existing.total_tasks;
+    }
+  }
+  console.log(`\n🧬 RESEARCH SWARM OPERATIONAL`);
+  console.log(`   ${missions.length} missions | ${totalTasks.toLocaleString()} total tasks`);
+  console.log(`   Dashboard: http://localhost:${PORT}`);
+  console.log(`   Health: http://localhost:${PORT}/api/v1/health\n`);
+
+  // Start heartbeat monitor
+  setInterval(checkHeartbeats, 30000);
+}
+
+// ============================================================
+// HEARTBEAT MONITOR — Release tasks from dead agents
+// ============================================================
+async function checkHeartbeats() {
+  try {
+    const timedOut = await db.getTimedOutAgents(HEARTBEAT_TIMEOUT);
+    for (const ag of timedOut) {
+      await db.updateAgent(ag.id, { status: 'disconnected', disconnected_at: new Date().toISOString() });
+      if (ag.current_task_id) {
+        await db.releaseTask(ag.current_task_id);
+      }
+      const mission = await db.getActiveMission();
+      if (mission) await db.log(mission.id, `Agent ${ag.id.slice(0,8)} timed out — task released`, 'leave');
+    }
+  } catch (e) { console.error('Heartbeat check error:', e.message); }
+}
+
+// ============================================================
+// MISSION ADVANCEMENT — auto-advance when complete
+// ============================================================
+async function checkMissionAdvancement(missionId) {
+  try {
+    const stats = await db.getTaskStats(missionId);
+    const mission = await db.getMission(missionId);
+    if (!mission) return;
+
+    await db.updateMissionProgress(missionId);
+
+    // Check if research phase is complete
+    if (stats.completed >= stats.total && mission.phase === 'research') {
+      await db.updateMissionPhase(missionId, 'synthesis');
+      await db.log(missionId, `🎉 ALL ${stats.total} TASKS COMPLETED — entering synthesis phase`, 'system');
+
+      // Check if there's a queued mission to activate
+      const allMissions = await db.getAllMissions();
+      const queued = allMissions.find(m => m.phase === 'queued');
+      if (queued) {
+        await db.updateMissionPhase(queued.id, 'research');
+        await db.log(queued.id, `🚀 Mission activated: ${queued.name}`, 'system');
+      }
+    }
+  } catch (e) { console.error('Advancement check error:', e.message); }
+}
+
+// ============================================================
+// API ROUTES
+// ============================================================
+
+// Health
+app.get('/api/v1/health', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    const agents = mission ? await db.countActiveAgents(mission.id) : 0;
+    res.json({
+      status: 'operational',
+      mission: mission?.id || null,
+      missionName: mission?.name || null,
+      activeAgents: agents,
+      uptime: Math.floor(process.uptime()),
+    });
+  } catch (e) {
+    res.json({ status: 'operational', mission: null, activeAgents: 0, uptime: Math.floor(process.uptime()) });
+  }
+});
+
+// SKILL.md
+app.get('/api/v1/skill', (req, res) => {
+  const host = `${req.protocol}://${req.get('host')}`;
+  try {
+    let skill = fs.readFileSync(SKILL_PATH, 'utf8');
+    skill = skill.replace(/\{API_URL\}/g, `${host}/api/v1`);
+    res.type('text/markdown').send(skill);
+  } catch (e) {
+    res.status(500).json({ error: 'SKILL.md not found' });
+  }
+});
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+app.get('/api/v1/dashboard', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) {
+      return res.json({ mission: null, stats: {}, divisions: [], recentFindings: [], recentActivity: [], allMissions: await db.getAllMissions() });
+    }
+
+    const taskStats = await db.getTaskStats(mission.id);
+    const divStats = await db.getDivisionStats(mission.id);
+    const agentCounts = await db.getQueueAgentCounts(mission.id);
+    const findings = await db.getFindings(mission.id, { limit: 50 });
+    const activity = await db.getRecentActivity(mission.id, 100);
+    const totalPapers = await db.totalPapers(mission.id);
+    const activeAgents = await db.countActiveAgents(mission.id);
+    const allMissions = await db.getAllMissions();
+    const papers = await db.getPapers(mission.id);
+
+    // Build division structure
+    const divMap = {};
+    for (const row of divStats) {
+      if (!divMap[row.division_id]) {
+        divMap[row.division_id] = { id: row.division_id, name: row.division_name, queues: {} };
+      }
+      if (!divMap[row.division_id].queues[row.queue_id]) {
+        divMap[row.division_id].queues[row.queue_id] = { id: row.queue_id, name: row.queue_name, total: 0, completed: 0, assigned: 0, available: 0, agents: agentCounts[row.queue_id] || 0 };
+      }
+      const q = divMap[row.division_id].queues[row.queue_id];
+      q[row.status] = parseInt(row.count);
+      q.total += parseInt(row.count);
+    }
+
+    const divisions = Object.values(divMap).map(d => ({
+      ...d, queues: Object.values(d.queues)
+    }));
+
+    res.json({
+      mission: { id: mission.id, name: mission.name, description: mission.description, phase: mission.phase },
+      stats: {
+        activeAgents,
+        totalPapers,
+        totalFindings: findings.length < 50 ? findings.length : await db.countFindings(mission.id),
+        tasksTotal: taskStats.total,
+        tasksCompleted: taskStats.completed,
+        tasksAssigned: taskStats.assigned,
+        tasksAvailable: taskStats.available,
+        progress: taskStats.total ? (taskStats.completed / taskStats.total * 100).toFixed(1) : 0,
+      },
+      divisions,
+      recentFindings: findings.map(f => ({
+        id: f.id, title: f.title, summary: f.summary,
+        division: f.division_id, queue: f.queue_id,
+        confidence: f.confidence, citations: f.citations,
+        papersAnalyzed: f.papers_analyzed, agentId: f.agent_id,
+        submittedAt: f.submitted_at, verified: f.verified,
+        contradictions: f.contradictions, gaps: f.gaps,
+      })),
+      recentActivity: activity.map(a => ({ msg: a.message, type: a.type, time: a.created_at })),
+      allMissions: allMissions.map(m => ({
+        id: m.id, name: m.name, phase: m.phase,
+        totalTasks: m.total_tasks, completedTasks: m.completed_tasks,
+      })),
+      papers: papers.map(p => ({ id: p.id, title: p.title, type: p.paper_type, division: p.division_id, generatedAt: p.generated_at })),
+    });
+  } catch (e) {
+    console.error('Dashboard error:', e);
+    res.status(500).json({ error: 'Dashboard error' });
+  }
+});
+
+// ============================================================
+// AGENT REGISTRATION
+// ============================================================
+app.post('/api/v1/agents/register', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) return res.status(503).json({ error: 'No active mission' });
+
+    // Find best available task
+    const task = await db.findBestTask(mission.id);
+    if (!task) return res.status(503).json({ error: 'No tasks available — all assigned or completed', mission: mission.name });
+
+    const agentId = `AG-${uuid().slice(0, 12)}`;
+    await db.assignTask(task.id, agentId);
+    await db.insertAgent({
+      id: agentId, status: 'active', role: 'worker',
+      currentTaskId: task.id, divisionId: task.division_id,
+      queueId: task.queue_id, missionId: mission.id,
+    });
+
+    await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → ${task.division_name} / ${task.queue_name}`, 'join');
+
+    res.json({
+      agentId,
+      mission: { id: mission.id, name: mission.name },
+      assignment: {
+        taskId: task.id,
+        division: task.division_name,
+        queue: task.queue_name,
+        description: task.description,
+        searchTerms: task.search_terms,
+        databases: task.databases,
+        depth: task.depth,
+      },
+      instructions: {
+        submitTo: `/api/v1/agents/${agentId}/findings`,
+        heartbeat: `/api/v1/agents/${agentId}/heartbeat`,
+        disconnect: `/api/v1/agents/${agentId}/disconnect`,
+        requirements: [
+          'Every claim MUST have a citation with: title, authors, journal, year, DOI or URL',
+          'Use ONLY open-access databases (PubMed, Semantic Scholar, bioRxiv, etc.)',
+          'Rate confidence: high (replicated, large studies) | medium (single studies, small N) | low (preprints, case reports)',
+          'Flag contradictions between studies explicitly',
+          'Minimum 5 papers analyzed per finding',
+          'Include methodology assessment for each cited study',
+        ],
+      },
+    });
+  } catch (e) {
+    console.error('Registration error:', e);
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+// ============================================================
+// SUBMIT FINDINGS
+// ============================================================
+app.post('/api/v1/agents/:id/findings', async (req, res) => {
+  try {
+    const agent = await db.getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    const { title, summary, citations, confidence, contradictions, gaps, papersAnalyzed } = req.body;
+    if (!title || !summary) return res.status(400).json({ error: 'title and summary required' });
+
+    // Validate citations
+    const cits = Array.isArray(citations) ? citations : [];
+    if (cits.length === 0) {
+      return res.status(400).json({ error: 'At least one citation required. Every claim must be backed by evidence.' });
+    }
+
+    const findingId = `F-${uuid().slice(0, 12)}`;
+    await db.insertFinding({
+      id: findingId,
+      agentId: agent.id,
+      taskId: agent.current_task_id,
+      missionId: agent.mission_id,
+      divisionId: agent.division_id,
+      queueId: agent.queue_id,
+      title, summary, citations: cits,
+      confidence: confidence || 'medium',
+      contradictions: contradictions || [],
+      gaps: gaps || [],
+      papersAnalyzed: papersAnalyzed || cits.length,
+    });
+
+    // Complete current task
+    if (agent.current_task_id) {
+      await db.completeTask(agent.current_task_id);
+    }
+
+    // Update agent stats
+    await db.updateAgent(agent.id, {
+      tasks_completed: (agent.tasks_completed || 0) + 1,
+      papers_analyzed: (agent.papers_analyzed || 0) + (papersAnalyzed || cits.length),
+      last_heartbeat: new Date().toISOString(),
+    });
+
+    await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} submitted: "${title}" (${cits.length} citations, ${confidence || 'medium'} confidence)`, 'finding');
+
+    // Check mission advancement
+    await checkMissionAdvancement(agent.mission_id);
+
+    // Try to assign next task
+    const nextTask = await db.findBestTask(agent.mission_id);
+    if (nextTask) {
+      await db.assignTask(nextTask.id, agent.id);
+      await db.updateAgent(agent.id, {
+        current_task_id: nextTask.id,
+        division_id: nextTask.division_id,
+        queue_id: nextTask.queue_id,
+      });
+      await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → next task: ${nextTask.queue_name}`, 'info');
+
+      return res.json({
+        findingId,
+        status: 'accepted',
+        nextAssignment: {
+          taskId: nextTask.id,
+          division: nextTask.division_name,
+          queue: nextTask.queue_name,
+          description: nextTask.description,
+          searchTerms: nextTask.search_terms,
+          databases: nextTask.databases,
+          depth: nextTask.depth,
+        },
+      });
+    }
+
+    // No more tasks
+    await db.updateAgent(agent.id, { status: 'completed', current_task_id: null });
+    await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} — no more tasks, mission work complete`, 'system');
+
+    res.json({ findingId, status: 'accepted', nextAssignment: null, message: 'All tasks completed. Thank you for your contribution.' });
+  } catch (e) {
+    console.error('Finding submission error:', e);
+    res.status(500).json({ error: 'Submission failed' });
+  }
+});
+
+// ============================================================
+// HEARTBEAT
+// ============================================================
+app.post('/api/v1/agents/:id/heartbeat', async (req, res) => {
+  try {
+    const agent = await db.getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    await db.updateAgent(agent.id, { last_heartbeat: new Date().toISOString() });
+    res.json({ status: 'ok', agentId: agent.id });
+  } catch (e) { res.status(500).json({ error: 'Heartbeat failed' }); }
+});
+
+// ============================================================
+// DISCONNECT
+// ============================================================
+app.post('/api/v1/agents/:id/disconnect', async (req, res) => {
+  try {
+    const agent = await db.getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    await db.updateAgent(agent.id, { status: 'disconnected', disconnected_at: new Date().toISOString(), current_task_id: null });
+    if (agent.current_task_id) await db.releaseTask(agent.current_task_id);
+    await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} disconnected gracefully (${agent.tasks_completed || 0} tasks completed)`, 'leave');
+    res.json({ status: 'disconnected', tasksCompleted: agent.tasks_completed || 0 });
+  } catch (e) { res.status(500).json({ error: 'Disconnect failed' }); }
+});
+
+// ============================================================
+// FINDINGS — list, single, export
+// ============================================================
+app.get('/api/v1/findings', async (req, res) => {
+  try {
+    const missionId = req.query.mission;
+    const mission = missionId ? await db.getMission(missionId) : await db.getActiveMission();
+    if (!mission) return res.json([]);
+    const findings = await db.getFindings(mission.id, {
+      division: req.query.division,
+      queue: req.query.queue,
+      confidence: req.query.confidence,
+      limit: parseInt(req.query.limit) || 200,
+    });
+    res.json(findings.map(f => ({
+      id: f.id, title: f.title, summary: f.summary, division: f.division_id,
+      queue: f.queue_id, confidence: f.confidence, citations: f.citations,
+      contradictions: f.contradictions, gaps: f.gaps,
+      papersAnalyzed: f.papers_analyzed, agentId: f.agent_id,
+      submittedAt: f.submitted_at, verified: f.verified,
+    })));
+  } catch (e) { res.status(500).json({ error: 'Failed to fetch findings' }); }
+});
+
+app.get('/api/v1/findings/:id', async (req, res) => {
+  try {
+    const f = await db.getFindingById(req.params.id);
+    if (!f) return res.status(404).json({ error: 'Not found' });
+    res.json(f);
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// ============================================================
+// EXPORT — JSON + CSV download
+// ============================================================
+app.get('/api/v1/export/findings', async (req, res) => {
+  try {
+    const missionId = req.query.mission;
+    const mission = missionId ? await db.getMission(missionId) : await db.getActiveMission();
+    if (!mission) return res.status(404).json({ error: 'No mission found' });
+
+    const findings = await db.getAllFindingsForExport(mission.id);
+    const format = req.query.format || 'json';
+
+    if (format === 'csv') {
+      const header = 'id,title,division,queue,confidence,papers_analyzed,citations_count,submitted_at,agent_id,verified,summary\n';
+      const rows = findings.map(f =>
+        `"${f.id}","${(f.title||'').replace(/"/g,'""')}","${f.division_id}","${f.queue_id}","${f.confidence}",${f.papers_analyzed},${(f.citations||[]).length},"${f.submitted_at}","${f.agent_id}",${f.verified},"${(f.summary||'').replace(/"/g,'""').replace(/\n/g,' ')}"`
+      ).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="research-swarm-${mission.id}-findings.csv"`);
+      return res.send(header + rows);
+    }
+
+    // Full JSON export with all citations
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="research-swarm-${mission.id}-findings.json"`);
+    res.json({
+      mission: { id: mission.id, name: mission.name, exportedAt: new Date().toISOString() },
+      totalFindings: findings.length,
+      totalCitations: findings.reduce((s, f) => s + (f.citations || []).length, 0),
+      findings: findings.map(f => ({
+        id: f.id, title: f.title, summary: f.summary,
+        division: f.division_id, queue: f.queue_id,
+        confidence: f.confidence, papersAnalyzed: f.papers_analyzed,
+        citations: f.citations, contradictions: f.contradictions,
+        gaps: f.gaps, agentId: f.agent_id,
+        submittedAt: f.submitted_at, verified: f.verified,
+      })),
+    });
+  } catch (e) {
+    console.error('Export error:', e);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// ============================================================
+// PAPER GENERATION — compile findings into research papers
+// ============================================================
+app.post('/api/v1/papers/generate', async (req, res) => {
+  try {
+    const { missionId, divisionId, type } = req.body; // type: 'division' | 'comprehensive'
+    const mission = missionId ? await db.getMission(missionId) : await db.getActiveMission();
+    if (!mission) return res.status(404).json({ error: 'No mission found' });
+
+    if (type === 'division' && divisionId) {
+      // Generate a division paper
+      const findings = await db.getFindings(mission.id, { division: divisionId });
+      if (findings.length === 0) return res.status(400).json({ error: 'No findings in this division yet' });
+
+      const allCitations = [];
+      findings.forEach(f => {
+        if (Array.isArray(f.citations)) allCitations.push(...f.citations);
+      });
+      const uniqueCitations = deduplicateCitations(allCitations);
+
+      const paper = {
+        id: `paper-${mission.id}-${divisionId}`,
+        missionId: mission.id,
+        divisionId,
+        type: 'division',
+        title: `${divisionId} — Systematic Review | ${mission.name}`,
+        abstract: `Compiled from ${findings.length} research findings across ${uniqueCitations.length} unique sources.`,
+        content: {
+          findings: findings.map(f => ({
+            title: f.title, summary: f.summary, confidence: f.confidence,
+            citations: f.citations, contradictions: f.contradictions, gaps: f.gaps,
+          })),
+          totalFindings: findings.length,
+          highConfidence: findings.filter(f => f.confidence === 'high').length,
+          mediumConfidence: findings.filter(f => f.confidence === 'medium').length,
+          lowConfidence: findings.filter(f => f.confidence === 'low').length,
+        },
+        citations: uniqueCitations,
+      };
+
+      await db.upsertPaper(paper);
+      await db.log(mission.id, `📄 Division paper generated: ${divisionId} (${findings.length} findings, ${uniqueCitations.length} citations)`, 'system');
+      return res.json({ paperId: paper.id, title: paper.title, findingsCount: findings.length, citationsCount: uniqueCitations.length });
+    }
+
+    // Comprehensive paper — all divisions
+    const findings = await db.getAllFindingsForExport(mission.id);
+    if (findings.length === 0) return res.status(400).json({ error: 'No findings yet' });
+
+    const allCitations = [];
+    findings.forEach(f => {
+      if (Array.isArray(f.citations)) allCitations.push(...f.citations);
+    });
+    const uniqueCitations = deduplicateCitations(allCitations);
+
+    // Group by division
+    const byDiv = {};
+    for (const f of findings) {
+      if (!byDiv[f.division_id]) byDiv[f.division_id] = [];
+      byDiv[f.division_id].push(f);
+    }
+
+    const paper = {
+      id: `paper-${mission.id}-comprehensive`,
+      missionId: mission.id,
+      divisionId: 'all',
+      type: 'comprehensive',
+      title: `Comprehensive Systematic Review: ${mission.name}`,
+      abstract: `Multi-agent systematic review compiled from ${findings.length} findings across ${Object.keys(byDiv).length} research divisions, citing ${uniqueCitations.length} unique sources.`,
+      content: {
+        divisions: Object.entries(byDiv).map(([div, fds]) => ({
+          division: div,
+          findingsCount: fds.length,
+          findings: fds.map(f => ({
+            title: f.title, summary: f.summary, confidence: f.confidence,
+            citations: f.citations, contradictions: f.contradictions, gaps: f.gaps,
+          })),
+        })),
+        statistics: {
+          totalFindings: findings.length,
+          totalDivisions: Object.keys(byDiv).length,
+          totalCitations: uniqueCitations.length,
+          highConfidence: findings.filter(f => f.confidence === 'high').length,
+          mediumConfidence: findings.filter(f => f.confidence === 'medium').length,
+          lowConfidence: findings.filter(f => f.confidence === 'low').length,
+          contradictions: findings.filter(f => f.contradictions && f.contradictions.length > 0).length,
+          gaps: findings.filter(f => f.gaps && f.gaps.length > 0).length,
+        },
+      },
+      citations: uniqueCitations,
+    };
+
+    await db.upsertPaper(paper);
+    await db.log(mission.id, `📋 COMPREHENSIVE PAPER generated: ${findings.length} findings, ${uniqueCitations.length} citations across ${Object.keys(byDiv).length} divisions`, 'system');
+    res.json({ paperId: paper.id, title: paper.title, findingsCount: findings.length, divisionsCount: Object.keys(byDiv).length, citationsCount: uniqueCitations.length });
+  } catch (e) {
+    console.error('Paper generation error:', e);
+    res.status(500).json({ error: 'Paper generation failed' });
+  }
+});
+
+// Get paper
+app.get('/api/v1/papers', async (req, res) => {
+  try {
+    const missionId = req.query.mission;
+    const mission = missionId ? await db.getMission(missionId) : await db.getActiveMission();
+    if (!mission) return res.json([]);
+    const papers = await db.getPapers(mission.id);
+    res.json(papers);
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.get('/api/v1/papers/:id', async (req, res) => {
+  try {
+    const paper = await db.getPaper(req.params.id);
+    if (!paper) return res.status(404).json({ error: 'Not found' });
+    res.json(paper);
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// Export paper as downloadable JSON
+app.get('/api/v1/papers/:id/export', async (req, res) => {
+  try {
+    const paper = await db.getPaper(req.params.id);
+    if (!paper) return res.status(404).json({ error: 'Not found' });
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${paper.id}.json"`);
+    res.json(paper);
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// ============================================================
+// MISSIONS — list, switch
+// ============================================================
+app.get('/api/v1/missions', async (req, res) => {
+  try {
+    const missions = await db.getAllMissions();
+    res.json(missions.map(m => ({
+      id: m.id, name: m.name, description: m.description,
+      phase: m.phase, totalTasks: m.total_tasks,
+      completedTasks: m.completed_tasks, startedAt: m.started_at, completedAt: m.completed_at,
+    })));
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.post('/api/v1/missions/:id/activate', async (req, res) => {
+  try {
+    const mission = await db.getMission(req.params.id);
+    if (!mission) return res.status(404).json({ error: 'Mission not found' });
+    // Pause current active mission
+    const active = await db.getActiveMission();
+    if (active && active.id !== mission.id) {
+      await db.updateMissionPhase(active.id, 'paused');
+    }
+    await db.updateMissionPhase(mission.id, 'research');
+    await db.log(mission.id, `🚀 Mission activated: ${mission.name}`, 'system');
+    res.json({ status: 'activated', mission: mission.name });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// ============================================================
+// STATS
+// ============================================================
+app.get('/api/v1/stats', async (req, res) => {
+  try {
+    const missions = await db.getAllMissions();
+    let totalTasks = 0, completedTasks = 0, totalFindings = 0, totalPapers = 0;
+    for (const m of missions) {
+      totalTasks += m.total_tasks || 0;
+      completedTasks += m.completed_tasks || 0;
+      totalFindings += await db.countFindings(m.id);
+      totalPapers += await db.totalPapers(m.id);
+    }
+    res.json({
+      missions: missions.length,
+      totalTasks,
+      completedTasks,
+      totalFindings,
+      totalPapers,
+      activeMission: (await db.getActiveMission())?.name || null,
+    });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// ============================================================
+// CITATION DEDUP HELPER
+// ============================================================
+function deduplicateCitations(citations) {
+  const seen = new Map();
+  for (const c of citations) {
+    const key = (typeof c === 'string') ? c : (c.doi || c.title || JSON.stringify(c));
+    if (!seen.has(key)) seen.set(key, c);
+  }
+  return Array.from(seen.values());
+}
+
+// ============================================================
+// SPA FALLBACK
+// ============================================================
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'index.html'));
+});
+
+// ============================================================
+// START
+// ============================================================
+app.listen(PORT, () => {
+  console.log(`\n🌐 Server starting on port ${PORT}...`);
+  startup().catch(e => {
+    console.error('❌ Startup failed:', e);
+    process.exit(1);
+  });
+});

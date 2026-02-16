@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c0392b"/>
+      <stop offset="100%" stop-color="#e74c3c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="80" fill="url(#g)"/>
+  <circle cx="256" cy="256" r="40" fill="#fff"/>
+  <circle cx="128" cy="144" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="384" cy="144" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="96" cy="320" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="416" cy="320" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="176" cy="432" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="336" cy="432" r="24" fill="#fff" opacity="0.85"/>
+  <circle cx="256" cy="112" r="18" fill="#fff" opacity="0.7"/>
+  <line x1="256" y1="256" x2="128" y2="144" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="384" y2="144" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="96" y2="320" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="416" y2="320" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="176" y2="432" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="336" y2="432" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="256" y1="256" x2="256" y2="112" stroke="#fff" stroke-width="8" opacity="0.45"/>
+  <line x1="128" y1="144" x2="384" y2="144" stroke="#fff" stroke-width="5" opacity="0.25"/>
+  <line x1="96" y1="320" x2="416" y2="320" stroke="#fff" stroke-width="5" opacity="0.25"/>
+  <line x1="176" y1="432" x2="336" y2="432" stroke="#fff" stroke-width="5" opacity="0.25"/>
+  <line x1="128" y1="144" x2="96" y2="320" stroke="#fff" stroke-width="5" opacity="0.25"/>
+  <line x1="384" y1="144" x2="416" y2="320" stroke="#fff" stroke-width="5" opacity="0.25"/>
+  <!-- DNA helix in center -->
+  <path d="M246 240 Q256 248 266 240" stroke="#c0392b" stroke-width="4" fill="none"/>
+  <path d="M246 252 Q256 260 266 252" stroke="#c0392b" stroke-width="4" fill="none"/>
+  <path d="M246 264 Q256 272 266 264" stroke="#c0392b" stroke-width="4" fill="none"/>
+</svg>

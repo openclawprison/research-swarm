@@ -1,0 +1,17 @@
+{
+  "name": "research-swarm",
+  "version": "2.0.0",
+  "description": "Research Swarm — Multi-Agent Cancer Research Platform",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node --watch backend/server.js",
+    "db:init": "node backend/db.js init"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "uuid": "^9.0.0",
+    "pg": "^8.12.0"
+  }
+}
