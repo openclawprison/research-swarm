@@ -221,6 +221,7 @@ function App(){
   const activity=data.recentActivity||[];
   const allM=data.allMissions||[];
   const papers=data.papers||[];
+  const agents=data.agents||[];
   const pct=parseFloat(s.progress)||0;
 
   const prompt=m?`Read the SKILL.md at ${window.location.origin}/api/v1/skill and join the Research Swarm. Register, research your assigned topic using PubMed and other open-access databases, and submit cited findings.`:'No active mission';
@@ -241,10 +242,7 @@ function App(){
     setTimeout(()=>{setGenMsg('');poll();},3000);
   };
 
-  const agList=[];
-  divs.forEach(d=>{d.queues.forEach(q=>{
-    for(let i=0;i<(q.agents||0);i++)agList.push({id:`${d.id}-${q.id}-${i}`,div:d.name,q:q.name,st:'active'});
-  });});
+  const agList=agents;
 
   return<div>
     <div className="topbar"><div className="topbar-l"><span><span className="topbar-dot" style={{background:con?'#27ae60':'#c0392b'}}/>{con?'Connected — polling live':'Connecting…'}</span><a href="https://github.com/openclawprison/research-swarm" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:16}}>GitHub</a><a href="https://x.com/ClawDevLord" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:10}}>@ClawDevLord</a></div><div className="topbar-r"><span>{s.activeAgents||0} agents</span><span>{(s.totalPapers||0).toLocaleString()} papers</span><span>{(s.totalFindings||0).toLocaleString()} findings</span><span>{(s.tasksTotal||0).toLocaleString()} tasks</span></div></div>
@@ -321,7 +319,7 @@ function App(){
 
       {tab==='agents'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Active Agents</div><div className="pnl-s">{agList.length} contributing</div></div>
         {agList.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents active. Deploy from Overview.</div></div></div>:
-        <div className="ag-grid">{agList.map(a=><div key={a.id} className="ag"><div className="ag-top"><span className="ag-id">{a.id.slice(0,16)}</span><span className={`ag-st ${a.st}`}>{a.st==='active'&&<span className="p"/>}{a.st==='active'?'Active':a.st}</span></div><div className="ag-d">Division: <b>{a.div}</b><br/>Queue: <b>{a.q}</b></div></div>)}</div>}
+        <div className="ag-grid">{agList.map(a=>{const dv=divs.find(d=>d.id===a.divisionId);const qv=dv&&dv.queues.find(q=>q.id===a.queueId);const ago=a.registeredAt?Math.round((Date.now()-new Date(a.registeredAt))/60000):0;return<div key={a.id} className="ag"><div className="ag-top"><span className="ag-id">{a.id}</span><span className="ag-st active"><span className="p"/>Active</span></div><div className="ag-d">Division: <b>{dv?dv.name:a.divisionId}</b><br/>Queue: <b>{qv?qv.name:a.queueId}</b><br/>Tasks completed: <b>{a.tasksCompleted||0}</b><br/>Joined: <b>{ago<60?ago+'m ago':Math.round(ago/60)+'h ago'}</b></div></div>;})}</div>}
       </div>}
 
       {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s" style={{display:'flex',gap:8,alignItems:'center'}}>

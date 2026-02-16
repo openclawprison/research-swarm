@@ -12,7 +12,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
-const HEARTBEAT_TIMEOUT = 120000; // 2 min timeout
+const HEARTBEAT_TIMEOUT = 600000; // 10 min timeout — agents can take time researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
 // ============================================================
@@ -139,6 +139,7 @@ app.get('/api/v1/dashboard', async (req, res) => {
     const activity = await db.getRecentActivity(mission.id, 100);
     const totalPapers = await db.totalPapers(mission.id);
     const activeAgents = await db.countActiveAgents(mission.id);
+    const activeAgentList = await db.getActiveAgents(mission.id);
     const allMissions = await db.getAllMissions();
     const papers = await db.getPapers(mission.id);
 
@@ -182,6 +183,7 @@ app.get('/api/v1/dashboard', async (req, res) => {
         contradictions: f.contradictions, gaps: f.gaps,
       })),
       recentActivity: activity.map(a => ({ msg: a.message, type: a.type, time: a.created_at })),
+      agents: activeAgentList.map(a => ({ id: a.id, divisionId: a.division_id, queueId: a.queue_id, taskId: a.current_task_id, tasksCompleted: a.tasks_completed, papersAnalyzed: a.papers_analyzed, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat })),
       allMissions: allMissions.map(m => ({
         id: m.id, name: m.name, phase: m.phase,
         totalTasks: m.total_tasks, completedTasks: m.completed_tasks,
