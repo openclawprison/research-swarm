@@ -13,7 +13,8 @@ app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
-const HEARTBEAT_TIMEOUT = 3600000; // 60 min — agents spend long periods researching
+const HEARTBEAT_TIMEOUT = 3600000;
+const QC_RATE = 0.3; // 30% of assignments are QC reviews // 60 min — agents spend long periods researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
 // ============================================================
@@ -88,6 +89,87 @@ async function checkMissionAdvancement(missionId) {
       }
     }
   } catch (e) { console.error('Advancement check error:', e.message); }
+}
+
+// ============================================================
+// ASSIGNMENT HELPER — decides research task vs QC review
+// ============================================================
+async function getNextAssignment(missionId, agentId) {
+  const researchTask = await db.findBestTask(missionId);
+  const findingCount = await db.countFindings(missionId);
+
+  // Need at least some findings before QC kicks in
+  if (findingCount < 5) {
+    if (!researchTask) return null;
+    return { type: 'research', task: researchTask };
+  }
+
+  const shouldQC = Math.random() < QC_RATE;
+
+  if (shouldQC || !researchTask) {
+    // Try to get a QC finding (not the agent's own work)
+    const findings = await db.getFindingsForQC(missionId, { limit: 1, excludeAgentId: agentId });
+    if (findings.length > 0) {
+      return { type: 'qc', finding: findings[0] };
+    }
+  }
+
+  if (researchTask) {
+    return { type: 'research', task: researchTask };
+  }
+
+  // No research tasks left — always QC
+  const findings = await db.getFindingsForQC(missionId, { limit: 1, excludeAgentId: agentId });
+  if (findings.length > 0) {
+    return { type: 'qc', finding: findings[0] };
+  }
+
+  return null;
+}
+
+function formatResearchAssignment(agentId, task) {
+  return {
+    type: 'research',
+    taskId: task.id,
+    division: task.division_name,
+    queue: task.queue_name,
+    description: task.description,
+    searchTerms: task.search_terms,
+    databases: task.databases,
+    depth: task.depth,
+    submitTo: `/api/v1/agents/${agentId}/findings`,
+  };
+}
+
+function formatQCAssignment(agentId, finding) {
+  return {
+    type: 'qc_review',
+    findingId: finding.id,
+    findingTitle: finding.title,
+    findingSummary: finding.summary,
+    findingCitations: finding.citations,
+    findingConfidence: finding.confidence,
+    findingContradictions: finding.contradictions,
+    findingGaps: finding.gaps,
+    findingDivision: finding.division_id,
+    findingQueue: finding.queue_id,
+    originalAgentId: finding.agent_id,
+    agentQuality: finding.agent_quality,
+    agentFlagged: finding.agent_flagged,
+    previousQCStatus: finding.qc_status,
+    qcCycle: (finding.qc_cycle || 0),
+    originalTaskDescription: finding.task_description || '',
+    originalSearchTerms: finding.task_search_terms || [],
+    submitTo: `/api/v1/agents/${agentId}/qc-submit`,
+    instructions: [
+      'Re-search the cited sources to verify they exist and support the claims made',
+      'Check: Do the cited papers actually exist? Are DOIs/URLs valid?',
+      'Check: Does the finding summary accurately reflect what the papers say?',
+      'Check: Is the confidence rating appropriate for the evidence quality?',
+      'Check: Are there obvious contradictions or gaps the agent missed?',
+      'Submit verdict: passed (accurate), flagged (concerns), or rejected (unreliable)',
+    ],
+  };
 }
 
 // ============================================================
@@ -210,46 +292,51 @@ app.post('/api/v1/agents/register', async (req, res) => {
     const mission = await db.getActiveMission();
     if (!mission) return res.status(503).json({ error: 'No active mission' });
 
-    // Find best available task
-    const task = await db.findBestTask(mission.id);
-    if (!task) return res.status(503).json({ error: 'No tasks available — all assigned or completed', mission: mission.name });
-
     const agentId = `AG-${uuid().slice(0, 12)}`;
-    await db.assignTask(task.id, agentId);
-    await db.insertAgent({
-      id: agentId, status: 'active', role: 'worker',
-      currentTaskId: task.id, divisionId: task.division_id,
-      queueId: task.queue_id, missionId: mission.id,
-    });
+    const assignment = await getNextAssignment(mission.id, agentId);
+    if (!assignment) return res.status(503).json({ error: 'No tasks or findings to review', mission: mission.name });
 
-    await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → ${task.division_name} / ${task.queue_name}`, 'join');
+    if (assignment.type === 'research') {
+      const task = assignment.task;
+      await db.assignTask(task.id, agentId);
+      await db.insertAgent({
+        id: agentId, status: 'active', role: 'worker',
+        currentTaskId: task.id, divisionId: task.division_id,
+        queueId: task.queue_id, missionId: mission.id,
+      });
+      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → ${task.division_name} / ${task.queue_name}`, 'join');
 
-    res.json({
-      agentId,
-      mission: { id: mission.id, name: mission.name },
-      assignment: {
-        taskId: task.id,
-        division: task.division_name,
-        queue: task.queue_name,
-        description: task.description,
-        searchTerms: task.search_terms,
-        databases: task.databases,
-        depth: task.depth,
-      },
-      instructions: {
-        submitTo: `/api/v1/agents/${agentId}/findings`,
-        heartbeat: `/api/v1/agents/${agentId}/heartbeat`,
-        disconnect: `/api/v1/agents/${agentId}/disconnect`,
-        requirements: [
-          'Every claim MUST have a citation with: title, authors, journal, year, DOI or URL',
-          'Use ONLY open-access databases (PubMed, Semantic Scholar, bioRxiv, etc.)',
-          'Rate confidence: high (replicated, large studies) | medium (single studies, small N) | low (preprints, case reports)',
-          'Flag contradictions between studies explicitly',
-          'Minimum 5 papers analyzed per finding',
-          'Include methodology assessment for each cited study',
-        ],
-      },
-    });
+      res.json({
+        agentId,
+        mission: { id: mission.id, name: mission.name },
+        assignment: formatResearchAssignment(agentId, task),
+        instructions: {
+          requirements: [
+            'Every claim MUST have a citation with: title, authors, journal, year, DOI or URL',
+            'Use ONLY open-access databases (PubMed, Semantic Scholar, bioRxiv, etc.)',
+            'Rate confidence: high (replicated, large studies) | medium (single studies, small N) | low (preprints, case reports)',
+            'Flag contradictions between studies explicitly',
+            'Minimum 5 papers analyzed per finding',
+            'Include methodology assessment for each cited study',
+          ],
+        },
+      });
+    } else {
+      // QC assignment
+      const f = assignment.finding;
+      await db.insertAgent({
+        id: agentId, status: 'active', role: 'qc',
+        currentTaskId: null, divisionId: 'qc',
+        queueId: 'qc-review', missionId: mission.id,
+      });
+      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → QC review`, 'join');
+
+      res.json({
+        agentId,
+        mission: { id: mission.id, name: mission.name },
+        assignment: formatQCAssignment(agentId, f),
+      });
+    }
   } catch (e) {
     console.error('Registration error:', e);
     res.status(500).json({ error: 'Registration failed' });
@@ -311,40 +398,122 @@ app.post('/api/v1/agents/:id/findings', async (req, res) => {
     // Check mission advancement
     await checkMissionAdvancement(agent.mission_id);
 
-    // Try to assign next task
-    const nextTask = await db.findBestTask(agent.mission_id);
-    if (nextTask) {
-      await db.assignTask(nextTask.id, agent.id);
-      await db.updateAgent(agent.id, {
-        current_task_id: nextTask.id,
-        division_id: nextTask.division_id,
-        queue_id: nextTask.queue_id,
-      });
-      await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → next task: ${nextTask.queue_name}`, 'info');
-
-      return res.json({
-        findingId,
-        status: 'accepted',
-        nextAssignment: {
-          taskId: nextTask.id,
-          division: nextTask.division_name,
-          queue: nextTask.queue_name,
-          description: nextTask.description,
-          searchTerms: nextTask.search_terms,
-          databases: nextTask.databases,
-          depth: nextTask.depth,
-        },
-      });
+    // Try to assign next task (research or QC)
+    const next = await getNextAssignment(agent.mission_id, agent.id);
+    if (next) {
+      if (next.type === 'research') {
+        await db.assignTask(next.task.id, agent.id);
+        await db.updateAgent(agent.id, {
+          role: 'worker',
+          current_task_id: next.task.id,
+          division_id: next.task.division_id,
+          queue_id: next.task.queue_id,
+        });
+        await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → next task: ${next.task.queue_name}`, 'info');
+        return res.json({
+          findingId, status: 'accepted',
+          nextAssignment: formatResearchAssignment(agent.id, next.task),
+        });
+      } else {
+        await db.updateAgent(agent.id, { role: 'qc', current_task_id: null, division_id: 'qc', queue_id: 'qc-review' });
+        await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → QC review`, 'info');
+        return res.json({
+          findingId, status: 'accepted',
+          nextAssignment: formatQCAssignment(agent.id, next.finding),
+        });
+      }
     }
 
-    // No more tasks
+    // No more tasks or findings
     await db.updateAgent(agent.id, { status: 'completed', current_task_id: null });
-    await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} — no more tasks, mission work complete`, 'system');
+    await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} — no more work available`, 'system');
 
     res.json({ findingId, status: 'accepted', nextAssignment: null, message: 'All tasks completed. Thank you for your contribution.' });
   } catch (e) {
     console.error('Finding submission error:', e);
     res.status(500).json({ error: 'Submission failed' });
+  }
+});
+
+// ============================================================
+// QC SUBMIT — agent submits review verdict
+// ============================================================
+app.post('/api/v1/agents/:id/qc-submit', async (req, res) => {
+  try {
+    const agent = await db.getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found. Re-register at POST /agents/register' });
+
+    if (agent.status !== 'active') {
+      await db.updateAgent(agent.id, { status: 'active', last_heartbeat: new Date().toISOString() });
+    }
+
+    const { findingId, verdict, notes } = req.body;
+    if (!findingId || !verdict) return res.status(400).json({ error: 'findingId and verdict required' });
+    if (!['passed', 'flagged', 'rejected'].includes(verdict)) {
+      return res.status(400).json({ error: 'verdict must be: passed, flagged, or rejected' });
+    }
+
+    const finding = await db.getFindingById(findingId);
+    if (!finding) return res.status(404).json({ error: 'Finding not found' });
+
+    // Record the QC review
+    await db.updateFindingQC(finding.id, {
+      qcStatus: verdict,
+      qcNotes: notes || null,
+      qcAgentId: agent.id,
+      qcCycle: (finding.qc_cycle || 0) + 1,
+    });
+
+    // Recalculate original agent's quality score
+    if (finding.agent_id) {
+      const quality = await db.recalcAgentQuality(finding.agent_id);
+      const mission = await db.getActiveMission();
+      if (mission) {
+        await db.log(mission.id, `QC ${verdict}: "${finding.title}" by ${finding.agent_id.slice(0,10)} (score: ${(quality.score * 100).toFixed(0)}%) — reviewed by ${agent.id.slice(0,10)}`, 'qc');
+        if (quality.flagged) {
+          await db.log(mission.id, `⚠ Agent ${finding.agent_id.slice(0,10)} FLAGGED — quality ${(quality.score * 100).toFixed(0)}%`, 'warning');
+        }
+      }
+    }
+
+    // Update QC agent stats
+    await db.updateAgent(agent.id, {
+      status: 'active',
+      tasks_completed: (agent.tasks_completed || 0) + 1,
+      last_heartbeat: new Date().toISOString(),
+    });
+
+    // Get next assignment (research or QC)
+    const next = await getNextAssignment(agent.mission_id, agent.id);
+    if (next) {
+      if (next.type === 'research') {
+        await db.assignTask(next.task.id, agent.id);
+        await db.updateAgent(agent.id, {
+          role: 'worker',
+          current_task_id: next.task.id,
+          division_id: next.task.division_id,
+          queue_id: next.task.queue_id,
+        });
+        await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → next task: ${next.task.queue_name}`, 'info');
+        return res.json({
+          status: 'reviewed', verdict,
+          nextAssignment: formatResearchAssignment(agent.id, next.task),
+        });
+      } else {
+        await db.updateAgent(agent.id, { role: 'qc', current_task_id: null, division_id: 'qc', queue_id: 'qc-review' });
+        await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} → QC review`, 'info');
+        return res.json({
+          status: 'reviewed', verdict,
+          nextAssignment: formatQCAssignment(agent.id, next.finding),
+        });
+      }
+    }
+
+    await db.updateAgent(agent.id, { status: 'completed', current_task_id: null });
+    res.json({ status: 'reviewed', verdict, nextAssignment: null, message: 'No more work available. Thank you.' });
+  } catch (e) {
+    console.error('QC submit error:', e);
+    res.status(500).json({ error: 'QC submission failed' });
   }
 });
 

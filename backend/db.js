@@ -337,18 +337,27 @@ const db = {
   },
 
   // QC Functions
-  async getFindingsForQC(missionId, { cycle = 0, limit = 1, prioritizeLowQuality = true } = {}) {
-    // Prioritize: 1) findings from flagged/low-quality agents, 2) unreviewed, 3) older cycle
-    let q = `SELECT f.*, a.quality_score as agent_quality, a.flagged as agent_flagged
-      FROM findings f LEFT JOIN agents a ON f.agent_id = a.id
-      WHERE f.mission_id=$1 AND (f.qc_status='pending' OR f.qc_cycle < $2)`;
-    const params = [missionId, cycle];
-    if (prioritizeLowQuality) {
-      q += ` ORDER BY a.flagged DESC NULLS LAST, a.quality_score ASC NULLS LAST, f.qc_cycle ASC, f.submitted_at ASC`;
-    } else {
-      q += ` ORDER BY f.qc_cycle ASC, f.submitted_at ASC`;
+  async getFindingsForQC(missionId, { limit = 1, excludeAgentId = null } = {}) {
+    // Priority: 1) never reviewed, 2) flagged agent work, 3) oldest reviewed (continuous cycling)
+    // Exclude findings by the reviewing agent (don't review your own work)
+    let q = `SELECT f.*, a.quality_score as agent_quality, a.flagged as agent_flagged,
+      t.description as task_description, t.search_terms as task_search_terms
+      FROM findings f
+      LEFT JOIN agents a ON f.agent_id = a.id
+      LEFT JOIN tasks t ON f.task_id = t.id
+      WHERE f.mission_id=$1`;
+    const params = [missionId];
+    if (excludeAgentId) {
+      q += ` AND f.agent_id != $${params.length + 1}`;
+      params.push(excludeAgentId);
     }
-    q += ` LIMIT $${params.length + 1}`;
+    q += ` ORDER BY
+      CASE WHEN f.qc_status='pending' THEN 0 ELSE 1 END ASC,
+      CASE WHEN a.flagged=true THEN 0 ELSE 1 END ASC,
+      a.quality_score ASC NULLS LAST,
+      f.qc_reviewed_at ASC NULLS FIRST,
+      f.submitted_at ASC
+      LIMIT $${params.length + 1}`;
     params.push(limit);
     const r = await pool.query(q, params);
     return r.rows;
