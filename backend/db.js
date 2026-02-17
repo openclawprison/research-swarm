@@ -117,6 +117,21 @@ async function initDB() {
   const client = await pool.connect();
   try {
     await client.query(SCHEMA);
+    // Migrations — add columns to existing tables
+    const migrations = [
+      "ALTER TABLE agents ADD COLUMN IF NOT EXISTS quality_score REAL DEFAULT 1.0",
+      "ALTER TABLE agents ADD COLUMN IF NOT EXISTS qc_passes INT DEFAULT 0",
+      "ALTER TABLE agents ADD COLUMN IF NOT EXISTS qc_fails INT DEFAULT 0",
+      "ALTER TABLE agents ADD COLUMN IF NOT EXISTS flagged BOOLEAN DEFAULT false",
+      "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_status TEXT DEFAULT 'pending'",
+      "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_notes TEXT",
+      "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_agent_id TEXT",
+      "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_cycle INT DEFAULT 0",
+      "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_reviewed_at TIMESTAMPTZ",
+    ];
+    for (const m of migrations) {
+      try { await client.query(m); } catch (e) { /* column already exists */ }
+    }
     console.log('✅ Database schema initialized');
   } finally {
     client.release();
