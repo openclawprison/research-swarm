@@ -337,7 +337,6 @@ app.post('/api/v1/agents/register', async (req, res) => {
         assignment: formatQCAssignment(agentId, f),
       });
     }
-    }
   } catch (e) {
     console.error('Registration error:', e);
     res.status(500).json({ error: 'Registration failed' });
