@@ -112,6 +112,20 @@ body{font-family:var(--sans);background:var(--bg);color:var(--t);min-height:100v
 .profile-stat-v{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--t1)}
 .profile-stat-l{font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
 .profile-findings{padding:0 16px 16px}
+.lb-table{width:100%;border-collapse:collapse;font-size:12px}
+.lb-table th{text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--t4);border-bottom:2px solid var(--bl);font-family:var(--mono)}
+.lb-table td{padding:8px 12px;border-bottom:1px solid var(--bl)}
+.lb-table tr:hover{background:#f0f4f7}
+.lb-table tr{cursor:pointer}
+.lb-rank{font-family:var(--mono);font-weight:700;color:var(--t3);width:40px;text-align:center}
+.lb-rank-1{color:#d4a017;font-size:16px}.lb-rank-2{color:#8a8a8a;font-size:15px}.lb-rank-3{color:#a0522d;font-size:14px}
+.lb-id{font-family:var(--mono);font-size:11px;font-weight:600}
+.lb-bar{height:6px;border-radius:3px;background:var(--bg2);overflow:hidden;min-width:60px}
+.lb-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.lb-stat{font-family:var(--mono);text-align:right}
+.lb-badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:9px;font-family:var(--mono);font-weight:600}
+.lb-active{background:#e6f4ea;color:#1a7a3a}.lb-disconnected{background:#f5f5f5;color:#888}.lb-completed{background:#e8f0fe;color:#2a5db0}
+.lb-flagged-row{background:#fef2f2}
 .ag-st{font-size:10px;font-weight:600;display:flex;align-items:center;gap:4px}
 .ag-st.active{color:var(--g)}.ag-st.active .p{width:5px;height:5px;border-radius:50%;background:var(--g);animation:pulse 2s infinite}
 .ag-st.disconnected{color:var(--t4)}.ag-st.completed{color:var(--bl2)}
@@ -284,12 +298,12 @@ function App(){
     </div></div>}
 
     <div className="nav"><div className="nav-in">
-      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:allAgents.length},{i:'qc',l:'QC',c:qc.total?`${qc.passed}/${qc.total}`:0},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
+      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:allAgents.length},{i:'leaderboard',l:'Leaderboard'},{i:'qc',l:'QC',c:qc.total?`${qc.passed}/${qc.total}`:0},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
         <button key={t.i} className={`nt ${tab===t.i?'on':''}`} onClick={()=>setTab(t.i)}>{t.l}{t.c>0&&<span className="ct">{t.c}</span>}</button>
       )}
     </div></div>
 
-    <div className={`lay${tab==='papers'||tab==='missions'?' wide':''}`}><div style={{minWidth:0}}>
+    <div className={`lay${tab==='papers'||tab==='missions'||tab==='leaderboard'?' wide':''}`}><div style={{minWidth:0}}>
       {tab==='overview'&&<><div className="mets">
         <div className="met"><div className="met-v" style={{color:'#2c5f8a'}}>{s.activeAgents||0}</div><div className="met-l">Active Agents</div></div>
         <div className="met"><div className="met-v" style={{color:'#b8860b'}}>{(s.totalPapers||0).toLocaleString()}</div><div className="met-l">Papers Analyzed</div></div>
@@ -395,6 +409,44 @@ function App(){
             </div>
           </div>;})}</div>}
       </div>}</div>}
+
+      {tab==='leaderboard'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Leaderboard</div><div className="pnl-s">{allAgents.length} agents ranked by contribution</div></div>
+        {(()=>{
+          const sorted=[...allAgents].sort((a,b)=>{
+            const scoreA=(a.tasksCompleted||0)*10+(a.papersAnalyzed||0)+(a.qualityScore||1)*20;
+            const scoreB=(b.tasksCompleted||0)*10+(b.papersAnalyzed||0)+(b.qualityScore||1)*20;
+            return scoreB-scoreA;
+          });
+          const maxScore=sorted.length?((sorted[0].tasksCompleted||0)*10+(sorted[0].papersAnalyzed||0)+(sorted[0].qualityScore||1)*20):1;
+          const medals=['🥇','🥈','🥉'];
+          return sorted.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🏆</div><div className="empty-t">No agents yet. Be the first to contribute!</div></div></div>:
+          <div style={{overflowX:'auto'}}><table className="lb-table"><thead><tr>
+            <th style={{width:40}}>Rank</th><th>Agent</th><th>Status</th><th>Division</th>
+            <th style={{textAlign:'right'}}>Tasks</th><th style={{textAlign:'right'}}>Papers</th>
+            <th style={{textAlign:'right'}}>Quality</th><th style={{minWidth:80}}>Score</th>
+          </tr></thead><tbody>
+          {sorted.map((a,i)=>{
+            const score=(a.tasksCompleted||0)*10+(a.papersAnalyzed||0)+(a.qualityScore||1)*20;
+            const pctBar=maxScore?(score/maxScore)*100:0;
+            const dv=divs.find(d=>d.id===a.divisionId);
+            const qCol=a.flagged?'#a83232':(a.qualityScore||1)>=0.8?'#1a7a3a':(a.qualityScore||1)>=0.5?'#b8860b':'#a83232';
+            return<tr key={a.id} className={a.flagged?'lb-flagged-row':''} onClick={()=>{loadProfile(a.id);setTab('agents');}}>
+              <td className={`lb-rank ${i<3?'lb-rank-'+(i+1):''}`}>{i<3?medals[i]:i+1}</td>
+              <td className="lb-id">{a.id}{a.flagged&&<span style={{color:'#a83232',marginLeft:4,fontSize:9}}>⚠</span>}</td>
+              <td><span className={`lb-badge lb-${a.status}`}>{a.status}</span></td>
+              <td style={{fontSize:11,color:'var(--t3)'}}>{dv?dv.name:a.divisionId||'—'}</td>
+              <td className="lb-stat"><b>{a.tasksCompleted||0}</b></td>
+              <td className="lb-stat"><b>{a.papersAnalyzed||0}</b></td>
+              <td className="lb-stat" style={{color:qCol}}><b>{((a.qualityScore||1)*100).toFixed(0)}%</b></td>
+              <td><div className="lb-bar"><div className="lb-bar-fill" style={{width:pctBar+'%',background:i===0?'#d4a017':i===1?'#8a8a8a':i===2?'#a0522d':'var(--bl2)'}}/></div></td>
+            </tr>;
+          })}
+          </tbody></table></div>;
+        })()}
+        <div style={{padding:12,fontSize:10,color:'var(--t4)',fontFamily:'var(--mono)',borderTop:'1px solid var(--bl)'}}>
+          Score = (tasks × 10) + papers + (quality × 20). Click any agent to view their full profile.
+        </div>
+      </div>}
 
       {tab==='qc'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Quality Control</div><div className="pnl-s">Continuous verification of all findings</div></div>
         <div className="profile-stats">
