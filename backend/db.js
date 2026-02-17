@@ -235,6 +235,14 @@ const db = {
     const r = await pool.query("SELECT * FROM agents WHERE mission_id=$1 AND status='active' ORDER BY registered_at DESC", [missionId]);
     return r.rows;
   },
+  async getAllAgents(missionId) {
+    const r = await pool.query("SELECT * FROM agents WHERE mission_id=$1 ORDER BY tasks_completed DESC, registered_at DESC", [missionId]);
+    return r.rows;
+  },
+  async getAgentFindings(agentId) {
+    const r = await pool.query("SELECT * FROM findings WHERE agent_id=$1 ORDER BY submitted_at DESC", [agentId]);
+    return r.rows;
+  },
   async countActiveAgents(missionId) {
     const r = await pool.query("SELECT COUNT(*) FROM agents WHERE mission_id=$1 AND status='active'", [missionId]);
     return parseInt(r.rows[0].count);

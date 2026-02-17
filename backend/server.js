@@ -41,8 +41,8 @@ async function startup() {
   console.log(`   Dashboard: http://localhost:${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/api/v1/health\n`);
 
-  // Start heartbeat monitor
-  setInterval(checkHeartbeats, 30000);
+  // Heartbeat monitor disabled — agents stay active until explicit disconnect
+  // Stale tasks can be released manually via POST /api/v1/admin/release-stale
 }
 
 // ============================================================
@@ -140,6 +140,7 @@ app.get('/api/v1/dashboard', async (req, res) => {
     const totalPapers = await db.totalPapers(mission.id);
     const activeAgents = await db.countActiveAgents(mission.id);
     const activeAgentList = await db.getActiveAgents(mission.id);
+    const allAgentList = await db.getAllAgents(mission.id);
     const allMissions = await db.getAllMissions();
     const papers = await db.getPapers(mission.id);
 
@@ -183,7 +184,8 @@ app.get('/api/v1/dashboard', async (req, res) => {
         contradictions: f.contradictions, gaps: f.gaps,
       })),
       recentActivity: activity.map(a => ({ msg: a.message, type: a.type, time: a.created_at })),
-      agents: activeAgentList.map(a => ({ id: a.id, divisionId: a.division_id, queueId: a.queue_id, taskId: a.current_task_id, tasksCompleted: a.tasks_completed, papersAnalyzed: a.papers_analyzed, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat })),
+      agents: activeAgentList.map(a => ({ id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id, taskId: a.current_task_id, tasksCompleted: a.tasks_completed, papersAnalyzed: a.papers_analyzed, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat })),
+      allAgents: allAgentList.map(a => ({ id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id, tasksCompleted: a.tasks_completed || 0, papersAnalyzed: a.papers_analyzed || 0, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat, disconnectedAt: a.disconnected_at })),
       allMissions: allMissions.map(m => ({
         id: m.id, name: m.name, phase: m.phase,
         totalTasks: m.total_tasks, completedTasks: m.completed_tasks,
@@ -374,6 +376,57 @@ app.post('/api/v1/agents/:id/heartbeat', async (req, res) => {
 });
 
 // ============================================================
+// AGENT PROFILES — all agents, past and present
+// ============================================================
+app.get('/api/v1/agents', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) return res.json([]);
+    const agents = await db.getAllAgents(mission.id);
+    res.json(agents.map(a => ({
+      id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id,
+      tasksCompleted: a.tasks_completed || 0, papersAnalyzed: a.papers_analyzed || 0,
+      registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat,
+      disconnectedAt: a.disconnected_at,
+    })));
+  } catch (e) { res.status(500).json({ error: 'Failed to list agents' }); }
+});
+
+app.get('/api/v1/agents/:id/profile', async (req, res) => {
+  try {
+    const agent = await db.getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const findings = await db.getAgentFindings(agent.id);
+    const divisionSet = new Set(); const queueSet = new Set();
+    findings.forEach(f => { divisionSet.add(f.division_id); queueSet.add(f.queue_id); });
+    const totalCitations = findings.reduce((s, f) => s + (Array.isArray(f.citations) ? f.citations.length : 0), 0);
+    const avgConfidence = findings.length ? findings.filter(f => f.confidence === 'high').length / findings.length : 0;
+    const activeMinutes = agent.last_heartbeat && agent.registered_at
+      ? Math.round((new Date(agent.last_heartbeat) - new Date(agent.registered_at)) / 60000) : 0;
+
+    res.json({
+      id: agent.id, status: agent.status,
+      registeredAt: agent.registered_at, lastActive: agent.last_heartbeat,
+      disconnectedAt: agent.disconnected_at,
+      tasksCompleted: agent.tasks_completed || 0,
+      papersAnalyzed: agent.papers_analyzed || 0,
+      totalCitations,
+      highConfidenceRate: Math.round(avgConfidence * 100),
+      divisionsWorked: divisionSet.size,
+      queuesWorked: queueSet.size,
+      activeMinutes,
+      findings: findings.map(f => ({
+        id: f.id, title: f.title, summary: f.summary,
+        division: f.division_id, queue: f.queue_id,
+        confidence: f.confidence, citationCount: Array.isArray(f.citations) ? f.citations.length : 0,
+        citations: f.citations, contradictions: f.contradictions, gaps: f.gaps,
+        submittedAt: f.submitted_at,
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: 'Failed to get agent profile' }); }
+});
+
+// ============================================================
 // DISCONNECT
 // ============================================================
 app.post('/api/v1/agents/:id/disconnect', async (req, res) => {
@@ -385,6 +438,24 @@ app.post('/api/v1/agents/:id/disconnect', async (req, res) => {
     await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} disconnected gracefully (${agent.tasks_completed || 0} tasks completed)`, 'leave');
     res.json({ status: 'disconnected', tasksCompleted: agent.tasks_completed || 0 });
   } catch (e) { res.status(500).json({ error: 'Disconnect failed' }); }
+});
+
+// ============================================================
+// ADMIN — manually release stale agents (no auto-timeout)
+// ============================================================
+app.post('/api/v1/admin/release-stale', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 2;
+    const stale = await db.getTimedOutAgents(hours * 3600000);
+    let released = 0;
+    for (const ag of stale) {
+      await db.updateAgent(ag.id, { status: 'disconnected', disconnected_at: new Date().toISOString() });
+      if (ag.current_task_id) { await db.releaseTask(ag.current_task_id); released++; }
+      const mission = await db.getActiveMission();
+      if (mission) await db.log(mission.id, `Agent ${ag.id.slice(0,8)} manually released (stale ${hours}h)`, 'leave');
+    }
+    res.json({ released, agents: stale.length });
+  } catch (e) { res.status(500).json({ error: 'Release failed' }); }
 });
 
 // ============================================================

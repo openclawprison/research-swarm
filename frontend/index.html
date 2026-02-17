@@ -91,9 +91,27 @@ body{font-family:var(--sans);background:var(--bg);color:var(--t);min-height:100v
 .gap{background:var(--ab);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--am);margin-top:6px;line-height:1.5}
 
 .ag-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--bl)}
-.ag{background:var(--w);padding:12px 14px}.ag:hover{background:#fcfcfb}
+.ag{background:var(--w);padding:12px 14px;cursor:pointer;transition:background .15s}.ag:hover{background:#f0f4f7}
 .ag-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
 .ag-id{font-family:var(--mono);font-size:12px;font-weight:600}
+.ag-stat-row{display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--t3);font-family:var(--mono)}
+.ag-stat-row b{color:var(--t1)}
+.ag-tabs{display:flex;gap:2px;padding:6px 14px;background:var(--bg2);border-bottom:1px solid var(--bl)}
+.ag-tab{padding:4px 12px;font-size:11px;font-family:var(--mono);border:none;background:none;color:var(--t4);cursor:pointer;border-radius:4px}
+.ag-tab.active{background:var(--w);color:var(--t1);font-weight:600}
+.profile-back{padding:8px 14px;font-size:11px;font-family:var(--mono);color:var(--bl2);cursor:pointer;border:none;background:none}
+.profile-back:hover{text-decoration:underline}
+.profile-header{padding:16px;border-bottom:1px solid var(--bl)}
+.profile-id{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--t1)}
+.profile-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-family:var(--mono);font-weight:600;margin-left:8px}
+.profile-badge.active{background:#e6f4ea;color:#1a7a3a}
+.profile-badge.disconnected{background:#fce8e6;color:#a83232}
+.profile-badge.completed{background:#e8f0fe;color:#2a5db0}
+.profile-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding:16px}
+.profile-stat{text-align:center;padding:10px;background:var(--bg2);border-radius:6px}
+.profile-stat-v{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--t1)}
+.profile-stat-l{font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.profile-findings{padding:0 16px 16px}
 .ag-st{font-size:10px;font-weight:600;display:flex;align-items:center;gap:4px}
 .ag-st.active{color:var(--g)}.ag-st.active .p{width:5px;height:5px;border-radius:50%;background:var(--g);animation:pulse 2s infinite}
 .ag-st.disconnected{color:var(--t4)}.ag-st.completed{color:var(--bl2)}
@@ -197,6 +215,8 @@ function App(){
   const[ofd,setOfd]=useState(null);
   const[copied,setCopied]=useState(false);
   const[genMsg,setGenMsg]=useState('');
+  const[agentProfile,setAgentProfile]=useState(null);
+  const[agentView,setAgentView]=useState('all'); // 'all' or 'active'
   const le=useRef(null);
 
   const poll=useCallback(async()=>{
@@ -222,10 +242,14 @@ function App(){
   const allM=data.allMissions||[];
   const papers=data.papers||[];
   const agents=data.agents||[];
+  const allAgents=data.allAgents||[];
   const pct=parseFloat(s.progress)||0;
 
   const prompt=m?`Read the SKILL.md at ${window.location.origin}/api/v1/skill and join the Research Swarm. Register, research your assigned topic using PubMed and other open-access databases, and submit cited findings.`:'No active mission';
   const doCopy=()=>{navigator.clipboard.writeText(prompt);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+  const loadProfile=async(agId)=>{
+    try{const r=await fetch(API+'/agents/'+agId+'/profile');if(r.ok){setAgentProfile(await r.json());}}catch(e){}
+  };
 
   const doExport=async(fmt)=>{
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
@@ -259,7 +283,7 @@ function App(){
     </div></div>}
 
     <div className="nav"><div className="nav-in">
-      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:s.activeAgents},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
+      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:allAgents.length},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
         <button key={t.i} className={`nt ${tab===t.i?'on':''}`} onClick={()=>setTab(t.i)}>{t.l}{t.c>0&&<span className="ct">{t.c}</span>}</button>
       )}
     </div></div>
@@ -317,10 +341,59 @@ function App(){
         </div>)}
       </div>}
 
-      {tab==='agents'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Active Agents</div><div className="pnl-s">{agList.length} contributing</div></div>
-        {agList.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents active. Deploy from Overview.</div></div></div>:
-        <div className="ag-grid">{agList.map(a=>{const dv=divs.find(d=>d.id===a.divisionId);const qv=dv&&dv.queues.find(q=>q.id===a.queueId);const ago=a.registeredAt?Math.round((Date.now()-new Date(a.registeredAt))/60000):0;return<div key={a.id} className="ag"><div className="ag-top"><span className="ag-id">{a.id}</span><span className="ag-st active"><span className="p"/>Active</span></div><div className="ag-d">Division: <b>{dv?dv.name:a.divisionId}</b><br/>Queue: <b>{qv?qv.name:a.queueId}</b><br/>Tasks completed: <b>{a.tasksCompleted||0}</b><br/>Joined: <b>{ago<60?ago+'m ago':Math.round(ago/60)+'h ago'}</b></div></div>;})}</div>}
-      </div>}
+      {tab==='agents'&&<div className="pnl">{agentProfile?<div>
+        <button className="profile-back" onClick={()=>setAgentProfile(null)}>← Back to all agents</button>
+        <div className="profile-header">
+          <span className="profile-id">{agentProfile.id}</span>
+          <span className={`profile-badge ${agentProfile.status}`}>{agentProfile.status}</span>
+          <div style={{fontSize:11,color:'var(--t4)',marginTop:4,fontFamily:'var(--mono)'}}>
+            Joined {new Date(agentProfile.registeredAt).toLocaleString()}
+            {agentProfile.disconnectedAt&&` · Left ${new Date(agentProfile.disconnectedAt).toLocaleString()}`}
+            {agentProfile.activeMinutes>0&&` · Active ${agentProfile.activeMinutes<60?agentProfile.activeMinutes+'m':Math.round(agentProfile.activeMinutes/60)+'h '+agentProfile.activeMinutes%60+'m'}`}
+          </div>
+        </div>
+        <div className="profile-stats">
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.tasksCompleted}</div><div className="profile-stat-l">Tasks Done</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.totalCitations}</div><div className="profile-stat-l">Citations</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.papersAnalyzed}</div><div className="profile-stat-l">Papers Read</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.divisionsWorked}</div><div className="profile-stat-l">Divisions</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.queuesWorked}</div><div className="profile-stat-l">Queues</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{agentProfile.highConfidenceRate}%</div><div className="profile-stat-l">High Confidence</div></div>
+        </div>
+        <div className="profile-findings">
+          <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:'var(--t2)'}}>Findings ({agentProfile.findings?.length||0})</div>
+          {(agentProfile.findings||[]).map(f=><div key={f.id} className="fd" onClick={()=>setOfd(ofd===f.id?null:f.id)}>
+            <div className="fd-top"><span className="fd-t">{f.title}</span><span className={`fd-c fd-c-${f.confidence}`}>{f.confidence}</span></div>
+            <div className="fd-m">{f.division} → {f.queue} · {f.citationCount} citations · {new Date(f.submittedAt).toLocaleDateString()}</div>
+            {ofd===f.id&&<div className="fd-x"><div className="fd-sum">{f.summary}</div>
+              {f.citations&&f.citations.length>0&&<div className="fd-cits"><div className="fd-ch">Citations</div>{f.citations.map((c,i)=><div key={i} className="fd-cit">{c.title||c.source} {c.doi&&<a href={`https://doi.org/${c.doi}`} target="_blank" rel="noopener" style={{color:'var(--bl2)',fontSize:10}}>{c.doi}</a>}</div>)}</div>}
+            </div>}
+          </div>)}
+        </div>
+      </div>:<div>
+        <div className="pnl-h"><div className="pnl-t">Agent Roster</div><div className="pnl-s" style={{display:'flex',gap:8,alignItems:'center'}}>
+          {allAgents.filter(a=>a.status==='active').length} active / {allAgents.length} total
+          <button className={`ag-tab ${agentView==='all'?'active':''}`} onClick={()=>setAgentView('all')}>All</button>
+          <button className={`ag-tab ${agentView==='active'?'active':''}`} onClick={()=>setAgentView('active')}>Active</button>
+          <button className="btn btn-sm btn-o" onClick={async()=>{if(confirm('Release agents inactive for 2+ hours?')){await fetch(API+'/admin/release-stale?hours=2',{method:'POST'});poll();}}}>Release Stale</button>
+        </div></div>
+        {allAgents.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents yet. Deploy from Overview.</div></div></div>:
+        <div className="ag-grid">{(agentView==='active'?allAgents.filter(a=>a.status==='active'):allAgents).map(a=>{
+          const dv=divs.find(d=>d.id===a.divisionId);
+          const ago=a.registeredAt?Math.round((Date.now()-new Date(a.registeredAt))/60000):0;
+          return<div key={a.id} className="ag" onClick={()=>loadProfile(a.id)}>
+            <div className="ag-top">
+              <span className="ag-id">{a.id}</span>
+              <span className={`ag-st ${a.status}`}>{a.status==='active'&&<span className="p"/>}{a.status}</span>
+            </div>
+            <div className="ag-d">{dv?dv.name:a.divisionId||'—'}</div>
+            <div className="ag-stat-row">
+              <span><b>{a.tasksCompleted||0}</b> tasks</span>
+              <span><b>{a.papersAnalyzed||0}</b> papers</span>
+              <span>{ago<60?ago+'m':Math.round(ago/60)+'h'} ago</span>
+            </div>
+          </div>;})}</div>}
+      </div>}</div>}
 
       {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s" style={{display:'flex',gap:8,alignItems:'center'}}>
         <button className="btn btn-sm btn-g" onClick={()=>doGenPaper('comprehensive')}>Generate Comprehensive Paper</button>
