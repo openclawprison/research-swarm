@@ -12,6 +12,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const HEARTBEAT_TIMEOUT = 3600000; // 60 min — agents spend long periods researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
@@ -445,6 +446,8 @@ app.post('/api/v1/agents/:id/disconnect', async (req, res) => {
 // ============================================================
 app.post('/api/v1/admin/release-stale', async (req, res) => {
   try {
+    const key = req.headers['x-admin-key'] || req.query.key;
+    if (!ADMIN_KEY || key !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
     const hours = parseInt(req.query.hours) || 2;
     const stale = await db.getTimedOutAgents(hours * 3600000);
     let released = 0;
@@ -539,6 +542,8 @@ app.get('/api/v1/export/findings', async (req, res) => {
 // ============================================================
 app.post('/api/v1/papers/generate', async (req, res) => {
   try {
+    const key = req.headers['x-admin-key'] || req.query.key;
+    if (!ADMIN_KEY || key !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized — paper generation is admin-only' });
     const { missionId, divisionId, type } = req.body; // type: 'division' | 'comprehensive'
     const mission = missionId ? await db.getMission(missionId) : await db.getActiveMission();
     if (!mission) return res.status(404).json({ error: 'No mission found' });

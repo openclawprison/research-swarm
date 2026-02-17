@@ -229,7 +229,7 @@ function App(){
   },[]);
 
   useEffect(()=>{poll();const i=setInterval(poll,5000);return()=>clearInterval(i);},[poll]);
-  useEffect(()=>{if(tab==='findings'||tab==='overview')le.current?.scrollIntoView({behavior:"smooth"});},[data?.recentActivity?.length]);
+  useEffect(()=>{},[data?.recentActivity?.length]);
 
   if(!data)return<div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',fontFamily:'var(--sans)'}}>
     <div style={{textAlign:'center'}}><div style={{fontSize:32,marginBottom:8}}>🧬</div><div style={{fontSize:14,color:'#888'}}>Connecting to Research Swarm…</div></div></div>;
@@ -375,7 +375,6 @@ function App(){
           {allAgents.filter(a=>a.status==='active').length} active / {allAgents.length} total
           <button className={`ag-tab ${agentView==='all'?'active':''}`} onClick={()=>setAgentView('all')}>All</button>
           <button className={`ag-tab ${agentView==='active'?'active':''}`} onClick={()=>setAgentView('active')}>Active</button>
-          <button className="btn btn-sm btn-o" onClick={async()=>{if(confirm('Release agents inactive for 2+ hours?')){await fetch(API+'/admin/release-stale?hours=2',{method:'POST'});poll();}}}>Release Stale</button>
         </div></div>
         {allAgents.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents yet. Deploy from Overview.</div></div></div>:
         <div className="ag-grid">{(agentView==='active'?allAgents.filter(a=>a.status==='active'):allAgents).map(a=>{
@@ -395,21 +394,13 @@ function App(){
           </div>;})}</div>}
       </div>}</div>}
 
-      {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s" style={{display:'flex',gap:8,alignItems:'center'}}>
-        <button className="btn btn-sm btn-g" onClick={()=>doGenPaper('comprehensive')}>Generate Comprehensive Paper</button>
-        {genMsg&&<span style={{fontSize:11,color:genMsg.startsWith('✅')?'var(--g)':'var(--r)'}}>{genMsg}</span>}
-      </div></div><div className="pnl-b">
-        {papers.length===0?<div className="empty"><div className="empty-i">📋</div><div className="empty-t">No papers generated yet. Submit findings first, then generate papers.</div></div>:
+      {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s">{papers.length} papers</div></div><div className="pnl-b">
+        {papers.length===0?<div className="empty"><div className="empty-i">📋</div><div className="empty-t">No papers generated yet. Papers are compiled by the platform admin once sufficient findings are collected.</div></div>:
         papers.map(p=><div key={p.id} className="paper-card" onClick={()=>window.open(`${API}/papers/${p.id}/export`,'_blank')}>
           <h3>{p.title}</h3><p>{p.type==='comprehensive'?'Comprehensive Review':'Division Paper'} · {p.division!=='all'?p.division+' · ':''}{new Date(p.generatedAt).toLocaleDateString()}</p>
           <div style={{fontSize:10,color:'var(--bl2)',marginTop:4}}>Click to download JSON</div>
         </div>)}
-      </div></div>
-      {m&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Generate Division Papers</div></div><div className="pnl-b" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-        {divs.filter(d=>d.id!=='qc').map(d=><button key={d.id} className="btn btn-sm btn-o" onClick={()=>doGenPaper('division',d.id)} style={{textAlign:'left',padding:'8px 12px'}}>
-          <span className="dot" style={{background:divCol(d.id),width:6,height:6,borderRadius:'50%',display:'inline-block',marginRight:6}}/>{d.name}
-        </button>)}
-      </div></div>}</>}
+      </div></div></>}
 
       {tab==='missions'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">All Research Missions</div><div className="pnl-s">{allM.length} missions · {allM.reduce((s,m)=>s+(m.totalTasks||0),0).toLocaleString()} total tasks</div></div><div className="pnl-b">
         {allM.map(ms=><div key={ms.id} className={`ms-card ${ms.phase==='research'?'active':''}`}>
