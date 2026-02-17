@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { v4: uuid } = require('uuid');
-const { initDB, db } = require('./db');
+const { pool, initDB, db } = require('./db');
 const { getAllMissions } = require('./missions');
 const fs = require('fs');
 
@@ -143,6 +143,7 @@ app.get('/api/v1/dashboard', async (req, res) => {
     const activeAgentList = await db.getActiveAgents(mission.id);
     const allAgentList = await db.getAllAgents(mission.id);
     const allMissions = await db.getAllMissions();
+    const qcStats = await db.getQCStats(mission.id);
     const papers = await db.getPapers(mission.id);
 
     // Build division structure
@@ -183,10 +184,12 @@ app.get('/api/v1/dashboard', async (req, res) => {
         papersAnalyzed: f.papers_analyzed, agentId: f.agent_id,
         submittedAt: f.submitted_at, verified: f.verified,
         contradictions: f.contradictions, gaps: f.gaps,
+        qcStatus: f.qc_status || 'pending',
       })),
       recentActivity: activity.map(a => ({ msg: a.message, type: a.type, time: a.created_at })),
       agents: activeAgentList.map(a => ({ id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id, taskId: a.current_task_id, tasksCompleted: a.tasks_completed, papersAnalyzed: a.papers_analyzed, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat })),
-      allAgents: allAgentList.map(a => ({ id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id, tasksCompleted: a.tasks_completed || 0, papersAnalyzed: a.papers_analyzed || 0, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat, disconnectedAt: a.disconnected_at })),
+      allAgents: allAgentList.map(a => ({ id: a.id, status: a.status, divisionId: a.division_id, queueId: a.queue_id, tasksCompleted: a.tasks_completed || 0, papersAnalyzed: a.papers_analyzed || 0, registeredAt: a.registered_at, lastHeartbeat: a.last_heartbeat, disconnectedAt: a.disconnected_at, qualityScore: a.quality_score, qcPasses: a.qc_passes || 0, qcFails: a.qc_fails || 0, flagged: a.flagged || false })),
+      qcStats,
       allMissions: allMissions.map(m => ({
         id: m.id, name: m.name, phase: m.phase,
         totalTasks: m.total_tasks, completedTasks: m.completed_tasks,
@@ -459,6 +462,139 @@ app.post('/api/v1/admin/release-stale', async (req, res) => {
     }
     res.json({ released, agents: stale.length });
   } catch (e) { res.status(500).json({ error: 'Release failed' }); }
+});
+
+// ============================================================
+// QUALITY CONTROL — review, flag, cycle
+// ============================================================
+
+// QC stats overview
+app.get('/api/v1/qc/stats', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) return res.json({ error: 'No active mission' });
+    const qcStats = await db.getQCStats(mission.id);
+    const flaggedAgents = await db.getFlaggedAgents(mission.id);
+    res.json({
+      ...qcStats,
+      reviewRate: qcStats.total ? Math.round(((qcStats.passed + qcStats.flagged + qcStats.rejected) / qcStats.total) * 100) : 0,
+      flaggedAgents: flaggedAgents.length,
+      agents: flaggedAgents.map(a => ({
+        id: a.id, qualityScore: a.quality_score, qcPasses: a.qc_passes, qcFails: a.qc_fails,
+        tasksCompleted: a.tasks_completed,
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: 'QC stats failed' }); }
+});
+
+// Get next finding to QC review — prioritizes low-quality agent work
+app.get('/api/v1/qc/next', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) return res.status(503).json({ error: 'No active mission' });
+    const cycle = parseInt(req.query.cycle) || 0;
+    const findings = await db.getFindingsForQC(mission.id, { cycle, limit: 1, prioritizeLowQuality: true });
+    if (findings.length === 0) return res.json({ finding: null, message: 'All findings reviewed for this cycle.' });
+    const f = findings[0];
+    res.json({
+      finding: {
+        id: f.id, title: f.title, summary: f.summary, citations: f.citations,
+        confidence: f.confidence, contradictions: f.contradictions, gaps: f.gaps,
+        division: f.division_id, queue: f.queue_id, agentId: f.agent_id,
+        agentQuality: f.agent_quality, agentFlagged: f.agent_flagged,
+        qcCycle: f.qc_cycle, qcStatus: f.qc_status,
+        submittedAt: f.submitted_at,
+      },
+    });
+  } catch (e) { res.status(500).json({ error: 'QC next failed' }); }
+});
+
+// Submit QC review for a finding
+app.post('/api/v1/qc/review/:findingId', async (req, res) => {
+  try {
+    const { verdict, notes, reviewerAgentId, cycle } = req.body;
+    if (!verdict || !['passed', 'flagged', 'rejected'].includes(verdict)) {
+      return res.status(400).json({ error: 'verdict required: passed, flagged, or rejected' });
+    }
+    const finding = await db.getFindingById(req.params.findingId);
+    if (!finding) return res.status(404).json({ error: 'Finding not found' });
+
+    await db.updateFindingQC(finding.id, {
+      qcStatus: verdict,
+      qcNotes: notes || null,
+      qcAgentId: reviewerAgentId || null,
+      qcCycle: (cycle || finding.qc_cycle || 0) + 1,
+    });
+
+    // Recalculate the original agent's quality score
+    if (finding.agent_id) {
+      const quality = await db.recalcAgentQuality(finding.agent_id);
+      const mission = await db.getActiveMission();
+      if (mission) {
+        await db.log(mission.id, `QC ${verdict}: "${finding.title}" (agent ${finding.agent_id.slice(0,10)} score: ${(quality.score * 100).toFixed(0)}%)`, 'qc');
+        if (quality.flagged) {
+          await db.log(mission.id, `⚠ Agent ${finding.agent_id.slice(0,10)} FLAGGED — quality ${(quality.score * 100).toFixed(0)}% (${quality.fails} fails / ${quality.passes + quality.fails} reviewed)`, 'warning');
+        }
+      }
+    }
+
+    // Get next finding to review
+    const missionId = finding.mission_id;
+    const nextFindings = await db.getFindingsForQC(missionId, { cycle: cycle || 0, limit: 1, prioritizeLowQuality: true });
+    const next = nextFindings[0] || null;
+
+    res.json({
+      status: 'reviewed',
+      findingId: finding.id,
+      verdict,
+      nextFinding: next ? {
+        id: next.id, title: next.title, summary: next.summary, citations: next.citations,
+        confidence: next.confidence, contradictions: next.contradictions, gaps: next.gaps,
+        division: next.division_id, queue: next.queue_id, agentId: next.agent_id,
+        agentQuality: next.agent_quality, agentFlagged: next.agent_flagged,
+        qcCycle: next.qc_cycle, qcStatus: next.qc_status,
+      } : null,
+    });
+  } catch (e) { console.error('QC review error:', e); res.status(500).json({ error: 'QC review failed' }); }
+});
+
+// Reset QC cycle — allows re-reviewing all findings (or just flagged ones)
+app.post('/api/v1/qc/reset-cycle', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'] || req.query.key;
+    if (!ADMIN_KEY || key !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
+    const mission = await db.getActiveMission();
+    if (!mission) return res.status(503).json({ error: 'No active mission' });
+    const { scope } = req.body; // 'all', 'flagged', 'low-quality'
+    let q, params;
+    if (scope === 'flagged') {
+      q = `UPDATE findings SET qc_status='pending' WHERE mission_id=$1 AND qc_status='flagged'`;
+      params = [mission.id];
+    } else if (scope === 'low-quality') {
+      q = `UPDATE findings SET qc_status='pending' WHERE mission_id=$1 AND agent_id IN (SELECT id FROM agents WHERE flagged=true)`;
+      params = [mission.id];
+    } else {
+      q = `UPDATE findings SET qc_status='pending' WHERE mission_id=$1`;
+      params = [mission.id];
+    }
+    const r = await pool.query(q, params);
+    await db.log(mission.id, `QC cycle reset (${scope || 'all'}) — ${r.rowCount} findings queued for re-review`, 'system');
+    res.json({ reset: r.rowCount, scope: scope || 'all' });
+  } catch (e) { res.status(500).json({ error: 'QC reset failed' }); }
+});
+
+// List flagged agents
+app.get('/api/v1/qc/flagged-agents', async (req, res) => {
+  try {
+    const mission = await db.getActiveMission();
+    if (!mission) return res.json([]);
+    const agents = await db.getFlaggedAgents(mission.id);
+    res.json(agents.map(a => ({
+      id: a.id, status: a.status, qualityScore: a.quality_score,
+      qcPasses: a.qc_passes, qcFails: a.qc_fails,
+      tasksCompleted: a.tasks_completed, papersAnalyzed: a.papers_analyzed,
+    })));
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
 // ============================================================

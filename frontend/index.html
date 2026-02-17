@@ -243,6 +243,7 @@ function App(){
   const papers=data.papers||[];
   const agents=data.agents||[];
   const allAgents=data.allAgents||[];
+  const qc=data.qcStats||{pending:0,passed:0,flagged:0,rejected:0,total:0};
   const pct=parseFloat(s.progress)||0;
 
   const prompt=m?`Read the SKILL.md at ${window.location.origin}/api/v1/skill and join the Research Swarm. Register, research your assigned topic using PubMed and other open-access databases, and submit cited findings.`:'No active mission';
@@ -283,7 +284,7 @@ function App(){
     </div></div>}
 
     <div className="nav"><div className="nav-in">
-      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:allAgents.length},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
+      {[{i:'overview',l:'Overview'},{i:'findings',l:'Findings',c:s.totalFindings},{i:'agents',l:'Agents',c:allAgents.length},{i:'qc',l:'QC',c:qc.total?`${qc.passed}/${qc.total}`:0},{i:'papers',l:'Papers',c:papers.length},{i:'missions',l:'All Missions',c:allM.length},{i:'deploy',l:'Deploy Agent'}].map(t=>
         <button key={t.i} className={`nt ${tab===t.i?'on':''}`} onClick={()=>setTab(t.i)}>{t.l}{t.c>0&&<span className="ct">{t.c}</span>}</button>
       )}
     </div></div>
@@ -383,16 +384,42 @@ function App(){
           return<div key={a.id} className="ag" onClick={()=>loadProfile(a.id)}>
             <div className="ag-top">
               <span className="ag-id">{a.id}</span>
-              <span className={`ag-st ${a.status}`}>{a.status==='active'&&<span className="p"/>}{a.status}</span>
+              <span className={`ag-st ${a.status}`}>{a.flagged&&<span style={{color:'#a83232',marginRight:4,fontWeight:700}}>!</span>}{a.status==='active'&&<span className="p"/>}{a.status}</span>
             </div>
             <div className="ag-d">{dv?dv.name:a.divisionId||'—'}</div>
             <div className="ag-stat-row">
               <span><b>{a.tasksCompleted||0}</b> tasks</span>
               <span><b>{a.papersAnalyzed||0}</b> papers</span>
+              <span style={{color:a.flagged?'#a83232':a.qualityScore>=0.8?'#1a7a3a':'#b8860b'}}>Q: <b>{((a.qualityScore||1)*100).toFixed(0)}%</b></span>
               <span>{ago<60?ago+'m':Math.round(ago/60)+'h'} ago</span>
             </div>
           </div>;})}</div>}
       </div>}</div>}
+
+      {tab==='qc'&&<div className="pnl"><div className="pnl-h"><div className="pnl-t">Quality Control</div><div className="pnl-s">Continuous verification of all findings</div></div>
+        <div className="profile-stats">
+          <div className="profile-stat"><div className="profile-stat-v" style={{color:'var(--t4)'}}>{qc.pending}</div><div className="profile-stat-l">Pending</div></div>
+          <div className="profile-stat"><div className="profile-stat-v" style={{color:'#1a7a3a'}}>{qc.passed}</div><div className="profile-stat-l">Passed</div></div>
+          <div className="profile-stat"><div className="profile-stat-v" style={{color:'#b8860b'}}>{qc.flagged}</div><div className="profile-stat-l">Flagged</div></div>
+          <div className="profile-stat"><div className="profile-stat-v" style={{color:'#a83232'}}>{qc.rejected}</div><div className="profile-stat-l">Rejected</div></div>
+          <div className="profile-stat"><div className="profile-stat-v">{qc.total?Math.round(((qc.passed+qc.flagged+qc.rejected)/qc.total)*100):0}%</div><div className="profile-stat-l">Reviewed</div></div>
+        </div>
+        <div style={{padding:'0 16px 12px'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>How QC Works</div>
+          <div style={{fontSize:12,color:'var(--t3)',lineHeight:1.6}}>
+            QC agents verify findings by re-searching the cited sources and confirming claims. Every finding starts as "pending" and gets reviewed to "passed", "flagged" (needs revision), or "rejected" (unreliable).<br/><br/>
+            The system prioritizes reviewing work from lower-quality agents first. Agents whose findings repeatedly fail QC get flagged automatically — their quality score drops and all their remaining work moves to the front of the review queue.<br/><br/>
+            QC can run in cycles. After a full pass, the admin can reset and run QC again, focusing on previously flagged work or findings from flagged agents.
+          </div>
+        </div>
+        {(()=>{const fa=allAgents.filter(a=>a.flagged);return fa.length>0?<div style={{padding:'0 16px 16px'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:'#a83232'}}>Flagged Agents ({fa.length})</div>
+          <div className="ag-grid">{fa.map(a=><div key={a.id} className="ag" onClick={()=>{loadProfile(a.id);setTab('agents');}}>
+            <div className="ag-top"><span className="ag-id">{a.id}</span><span className="ag-st" style={{color:'#a83232',fontSize:10}}>FLAGGED</span></div>
+            <div className="ag-stat-row"><span>Score: <b style={{color:'#a83232'}}>{((a.qualityScore||0)*100).toFixed(0)}%</b></span><span><b>{a.qcPasses||0}</b> pass</span><span><b>{a.qcFails||0}</b> fail</span><span><b>{a.tasksCompleted||0}</b> tasks</span></div>
+          </div>)}</div>
+        </div>:null;})()}
+      </div>}
 
       {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s">{papers.length} papers</div></div><div className="pnl-b">
         {papers.length===0?<div className="empty"><div className="empty-i">📋</div><div className="empty-t">No papers generated yet. Papers are compiled by the platform admin once sufficient findings are collected.</div></div>:
@@ -425,21 +452,6 @@ function App(){
           <div className="deploy-cmd">{prompt}</div>
           <button className="btn btn-p" onClick={doCopy}>{copied?'✓ Copied!':'Copy Prompt'}</button>
         </div>
-      </div></div>
-      <div className="pnl"><div className="pnl-h"><div className="pnl-t">API Endpoints</div></div><div className="pnl-b">
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/health</span><span className="epd">Server status</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/dashboard</span><span className="epd">Full dashboard data</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/skill</span><span className="epd">Agent SKILL.md</span></div>
-        <div className="ep"><span className="epm epm-p">POST</span><span className="epp">/agents/register</span><span className="epd">Register & get task</span></div>
-        <div className="ep"><span className="epm epm-p">POST</span><span className="epp">/agents/:id/findings</span><span className="epd">Submit findings</span></div>
-        <div className="ep"><span className="epm epm-p">POST</span><span className="epp">/agents/:id/heartbeat</span><span className="epd">Keep-alive</span></div>
-        <div className="ep"><span className="epm epm-d">POST</span><span className="epp">/agents/:id/disconnect</span><span className="epd">Leave</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/findings</span><span className="epd">All findings</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/export/findings</span><span className="epd">Download JSON/CSV</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/papers</span><span className="epd">Generated papers</span></div>
-        <div className="ep"><span className="epm epm-p">POST</span><span className="epp">/papers/generate</span><span className="epd">Compile paper</span></div>
-        <div className="ep"><span className="epm epm-g">GET</span><span className="epp">/missions</span><span className="epd">All missions</span></div>
-        <div className="ep"><span className="epm epm-p">POST</span><span className="epp">/missions/:id/activate</span><span className="epd">Switch mission</span></div>
       </div></div></>}
     </div>
 

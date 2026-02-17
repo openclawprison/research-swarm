@@ -54,7 +54,11 @@ CREATE TABLE IF NOT EXISTS agents (
   last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
   disconnected_at TIMESTAMPTZ,
   tasks_completed INT DEFAULT 0,
-  papers_analyzed INT DEFAULT 0
+  papers_analyzed INT DEFAULT 0,
+  quality_score REAL DEFAULT 1.0,
+  qc_passes INT DEFAULT 0,
+  qc_fails INT DEFAULT 0,
+  flagged BOOLEAN DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS findings (
@@ -72,7 +76,12 @@ CREATE TABLE IF NOT EXISTS findings (
   gaps JSONB DEFAULT '[]',
   papers_analyzed INT DEFAULT 0,
   verified BOOLEAN DEFAULT false,
-  submitted_at TIMESTAMPTZ DEFAULT NOW()
+  submitted_at TIMESTAMPTZ DEFAULT NOW(),
+  qc_status TEXT DEFAULT 'pending',
+  qc_notes TEXT,
+  qc_agent_id TEXT,
+  qc_cycle INT DEFAULT 0,
+  qc_reviewed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS papers (
@@ -309,6 +318,73 @@ const db = {
   },
   async getRecentActivity(missionId, limit = 100) {
     const r = await pool.query('SELECT * FROM activity_log WHERE mission_id=$1 ORDER BY created_at DESC LIMIT $2', [missionId, limit]);
+    return r.rows;
+  },
+
+  // QC Functions
+  async getFindingsForQC(missionId, { cycle = 0, limit = 1, prioritizeLowQuality = true } = {}) {
+    // Prioritize: 1) findings from flagged/low-quality agents, 2) unreviewed, 3) older cycle
+    let q = `SELECT f.*, a.quality_score as agent_quality, a.flagged as agent_flagged
+      FROM findings f LEFT JOIN agents a ON f.agent_id = a.id
+      WHERE f.mission_id=$1 AND (f.qc_status='pending' OR f.qc_cycle < $2)`;
+    const params = [missionId, cycle];
+    if (prioritizeLowQuality) {
+      q += ` ORDER BY a.flagged DESC NULLS LAST, a.quality_score ASC NULLS LAST, f.qc_cycle ASC, f.submitted_at ASC`;
+    } else {
+      q += ` ORDER BY f.qc_cycle ASC, f.submitted_at ASC`;
+    }
+    q += ` LIMIT $${params.length + 1}`;
+    params.push(limit);
+    const r = await pool.query(q, params);
+    return r.rows;
+  },
+  async updateFindingQC(findingId, { qcStatus, qcNotes, qcAgentId, qcCycle }) {
+    await pool.query(
+      `UPDATE findings SET qc_status=$2, qc_notes=$3, qc_agent_id=$4, qc_cycle=$5, qc_reviewed_at=NOW() WHERE id=$1`,
+      [findingId, qcStatus, qcNotes, qcAgentId, qcCycle]
+    );
+  },
+  async recalcAgentQuality(agentId) {
+    const r = await pool.query(
+      `SELECT qc_status, COUNT(*) as cnt FROM findings WHERE agent_id=$1 AND qc_status IN ('passed','flagged','rejected') GROUP BY qc_status`,
+      [agentId]
+    );
+    let passes = 0, fails = 0;
+    for (const row of r.rows) {
+      if (row.qc_status === 'passed') passes = parseInt(row.cnt);
+      else fails += parseInt(row.cnt);
+    }
+    const total = passes + fails;
+    const score = total > 0 ? passes / total : 1.0;
+    const flagged = total >= 3 && score < 0.5;
+    await pool.query(
+      `UPDATE agents SET quality_score=$2, qc_passes=$3, qc_fails=$4, flagged=$5 WHERE id=$1`,
+      [agentId, score, passes, fails, flagged]
+    );
+    return { score, passes, fails, flagged };
+  },
+  async getQCStats(missionId) {
+    const r = await pool.query(
+      `SELECT qc_status, COUNT(*) as cnt FROM findings WHERE mission_id=$1 GROUP BY qc_status`,
+      [missionId]
+    );
+    const stats = { pending: 0, passed: 0, flagged: 0, rejected: 0, total: 0 };
+    for (const row of r.rows) { stats[row.qc_status] = parseInt(row.cnt); stats.total += parseInt(row.cnt); }
+    return stats;
+  },
+  async getFlaggedAgents(missionId) {
+    const r = await pool.query(
+      `SELECT * FROM agents WHERE mission_id=$1 AND flagged=true ORDER BY quality_score ASC`,
+      [missionId]
+    );
+    return r.rows;
+  },
+  async getFindingsByAgent(agentId, { qcStatus } = {}) {
+    let q = 'SELECT * FROM findings WHERE agent_id=$1';
+    const p = [agentId];
+    if (qcStatus) { q += ` AND qc_status=$2`; p.push(qcStatus); }
+    q += ' ORDER BY submitted_at DESC';
+    const r = await pool.query(q, p);
     return r.rows;
   },
 };
