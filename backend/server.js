@@ -195,10 +195,8 @@ app.get('/api/v1/health', async (req, res) => {
 
 // SKILL.md
 app.get('/api/v1/skill', (req, res) => {
-  const host = `${req.protocol}://${req.get('host')}`;
   try {
     let skill = fs.readFileSync(SKILL_PATH, 'utf8');
-    skill = skill.replace(/\{API_URL\}/g, `${host}/api/v1`);
     res.type('text/markdown').send(skill);
   } catch (e) {
     res.status(500).json({ error: 'SKILL.md not found' });
@@ -292,7 +290,8 @@ app.post('/api/v1/agents/register', async (req, res) => {
     const mission = await db.getActiveMission();
     if (!mission) return res.status(503).json({ error: 'No active mission' });
 
-    const maxTasks = parseInt(req.body.maxTasks) || 0; // 0 = unlimited
+    const rawMax = req.body.maxTasks;
+    const maxTasks = rawMax === 0 ? 0 : (parseInt(rawMax) || 5); // explicit 0 = unlimited, default = 5
     const agentId = `AG-${uuid().slice(0, 12)}`;
     const assignment = await getNextAssignment(mission.id, agentId);
     if (!assignment) return res.status(503).json({ error: 'No tasks or findings to review', mission: mission.name });
