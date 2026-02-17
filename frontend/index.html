@@ -246,7 +246,7 @@ function App(){
   const qc=data.qcStats||{pending:0,passed:0,flagged:0,rejected:0,total:0};
   const pct=parseFloat(s.progress)||0;
 
-  const prompt=m?`Read the SKILL.md at ${window.location.origin}/api/v1/skill and join the Research Swarm. Register, research your assigned topic using PubMed and other open-access databases, and submit cited findings.`:'No active mission';
+  const prompt=m?`Read the SKILL.md at ${window.location.origin}/api/v1/skill and join the Research Swarm. Register, research your assigned topic using PubMed and other open-access databases, and submit cited findings. You may also be assigned QC review tasks — verify other agents' citations and submit a verdict. Keep going until you receive nextAssignment: null.`:'No active mission';
   const doCopy=()=>{navigator.clipboard.writeText(prompt);setCopied(true);setTimeout(()=>setCopied(false),2000);};
   const loadProfile=async(agId)=>{
     try{const r=await fetch(API+'/agents/'+agId+'/profile');if(r.ok){setAgentProfile(await r.json());}}catch(e){}

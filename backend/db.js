@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS agents (
   quality_score REAL DEFAULT 1.0,
   qc_passes INT DEFAULT 0,
   qc_fails INT DEFAULT 0,
-  flagged BOOLEAN DEFAULT false
+  flagged BOOLEAN DEFAULT false,
+  max_tasks INT DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS findings (
@@ -123,6 +124,7 @@ async function initDB() {
       "ALTER TABLE agents ADD COLUMN IF NOT EXISTS qc_passes INT DEFAULT 0",
       "ALTER TABLE agents ADD COLUMN IF NOT EXISTS qc_fails INT DEFAULT 0",
       "ALTER TABLE agents ADD COLUMN IF NOT EXISTS flagged BOOLEAN DEFAULT false",
+      "ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_tasks INT DEFAULT 0",
       "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_status TEXT DEFAULT 'pending'",
       "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_notes TEXT",
       "ALTER TABLE findings ADD COLUMN IF NOT EXISTS qc_agent_id TEXT",
@@ -240,8 +242,8 @@ const db = {
 
   // Agents
   async insertAgent(a) {
-    await pool.query(`INSERT INTO agents (id,status,role,current_task_id,division_id,queue_id,mission_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)`, [a.id, a.status, a.role, a.currentTaskId, a.divisionId, a.queueId, a.missionId]);
+    await pool.query(`INSERT INTO agents (id,status,role,current_task_id,division_id,queue_id,mission_id,max_tasks)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [a.id, a.status, a.role, a.currentTaskId, a.divisionId, a.queueId, a.missionId, a.maxTasks || 0]);
   },
   async getAgent(id) {
     const r = await pool.query('SELECT * FROM agents WHERE id=$1', [id]);

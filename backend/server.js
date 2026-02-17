@@ -292,6 +292,7 @@ app.post('/api/v1/agents/register', async (req, res) => {
     const mission = await db.getActiveMission();
     if (!mission) return res.status(503).json({ error: 'No active mission' });
 
+    const maxTasks = parseInt(req.body.maxTasks) || 0; // 0 = unlimited
     const agentId = `AG-${uuid().slice(0, 12)}`;
     const assignment = await getNextAssignment(mission.id, agentId);
     if (!assignment) return res.status(503).json({ error: 'No tasks or findings to review', mission: mission.name });
@@ -302,12 +303,12 @@ app.post('/api/v1/agents/register', async (req, res) => {
       await db.insertAgent({
         id: agentId, status: 'active', role: 'worker',
         currentTaskId: task.id, divisionId: task.division_id,
-        queueId: task.queue_id, missionId: mission.id,
+        queueId: task.queue_id, missionId: mission.id, maxTasks,
       });
-      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → ${task.division_name} / ${task.queue_name}`, 'join');
+      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → ${task.division_name} / ${task.queue_name}${maxTasks ? ` (limit: ${maxTasks} tasks)` : ''}`, 'join');
 
       res.json({
-        agentId,
+        agentId, maxTasks: maxTasks || 'unlimited',
         mission: { id: mission.id, name: mission.name },
         assignment: formatResearchAssignment(agentId, task),
         instructions: {
@@ -322,20 +323,20 @@ app.post('/api/v1/agents/register', async (req, res) => {
         },
       });
     } else {
-      // QC assignment
       const f = assignment.finding;
       await db.insertAgent({
         id: agentId, status: 'active', role: 'qc',
         currentTaskId: null, divisionId: 'qc',
-        queueId: 'qc-review', missionId: mission.id,
+        queueId: 'qc-review', missionId: mission.id, maxTasks,
       });
-      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → QC review`, 'join');
+      await db.log(mission.id, `Agent ${agentId.slice(0,10)} registered → QC review${maxTasks ? ` (limit: ${maxTasks} tasks)` : ''}`, 'join');
 
       res.json({
-        agentId,
+        agentId, maxTasks: maxTasks || 'unlimited',
         mission: { id: mission.id, name: mission.name },
         assignment: formatQCAssignment(agentId, f),
       });
+    }
     }
   } catch (e) {
     console.error('Registration error:', e);
@@ -397,6 +398,14 @@ app.post('/api/v1/agents/:id/findings', async (req, res) => {
 
     // Check mission advancement
     await checkMissionAdvancement(agent.mission_id);
+
+    // Check task budget
+    const tasksNow = (agent.tasks_completed || 0) + 1;
+    if (agent.max_tasks > 0 && tasksNow >= agent.max_tasks) {
+      await db.updateAgent(agent.id, { status: 'completed', current_task_id: null });
+      await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} — reached task limit (${tasksNow}/${agent.max_tasks}). Stopping.`, 'system');
+      return res.json({ findingId, status: 'accepted', nextAssignment: null, message: `Task limit reached (${tasksNow}/${agent.max_tasks}). Thank you for your contribution.` });
+    }
 
     // Try to assign next task (research or QC)
     const next = await getNextAssignment(agent.mission_id, agent.id);
@@ -482,6 +491,14 @@ app.post('/api/v1/agents/:id/qc-submit', async (req, res) => {
       tasks_completed: (agent.tasks_completed || 0) + 1,
       last_heartbeat: new Date().toISOString(),
     });
+
+    // Check task budget
+    const tasksNow = (agent.tasks_completed || 0) + 1;
+    if (agent.max_tasks > 0 && tasksNow >= agent.max_tasks) {
+      await db.updateAgent(agent.id, { status: 'completed', current_task_id: null });
+      await db.log(agent.mission_id, `Agent ${agent.id.slice(0,10)} — reached task limit (${tasksNow}/${agent.max_tasks}). Stopping.`, 'system');
+      return res.json({ status: 'reviewed', verdict, nextAssignment: null, message: `Task limit reached (${tasksNow}/${agent.max_tasks}). Thank you.` });
+    }
 
     // Get next assignment (research or QC)
     const next = await getNextAssignment(agent.mission_id, agent.id);
