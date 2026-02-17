@@ -309,7 +309,7 @@ const db = {
   },
   async getRecentActivity(missionId, limit = 100) {
     const r = await pool.query('SELECT * FROM activity_log WHERE mission_id=$1 ORDER BY created_at DESC LIMIT $2', [missionId, limit]);
-    return r.rows.reverse();
+    return r.rows;
   },
 };
 
