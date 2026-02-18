@@ -231,6 +231,8 @@ function App(){
   const[genMsg,setGenMsg]=useState('');
   const[agentProfile,setAgentProfile]=useState(null);
   const[agentView,setAgentView]=useState('all'); // 'all' or 'active'
+  const[adminKey,setAdminKey]=useState('');
+  const[selDiv,setSelDiv]=useState('');
   const le=useRef(null);
 
   const poll=useCallback(async()=>{
@@ -256,7 +258,7 @@ function App(){
   const allM=data.allMissions||[];
   const papers=data.papers||[];
   const agents=data.agents||[];
-  const trueActive=agents.filter(a=>a.status==='active'&&a.lastHeartbeat&&(Date.now()-new Date(a.lastHeartbeat))<900000).length;
+  const trueActive=agents.filter(a=>a.status==='active'&&a.lastHeartbeat&&(Date.now()-new Date(a.lastHeartbeat))<1800000).length;
   const allAgents=data.allAgents||[];
   const qc=data.qcStats||{pending:0,passed:0,flagged:0,rejected:0,total:0};
   const pct=parseFloat(s.progress)||0;
@@ -271,8 +273,6 @@ function App(){
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
   };
 
-  const[adminKey,setAdminKey]=useState('');
-  const[selDiv,setSelDiv]=useState('');
 
   const doGenPaper=async(type,divId)=>{
     if(!adminKey){setGenMsg('❌ Enter admin key first');return;}
@@ -395,14 +395,14 @@ function App(){
           {allAgents.filter(a=>a.status==='active').length} active ({trueActive} working) / {allAgents.length} total
           <button className={`ag-tab ${agentView==='all'?'active':''}`} onClick={()=>setAgentView('all')}>All</button>
           <button className={`ag-tab ${agentView==='active'?'active':''}`} onClick={()=>setAgentView('active')}>Active</button>
-          {adminKey&&allAgents.filter(a=>a.status==='active').length>trueActive&&<button className="ag-tab" style={{background:'#e67e22',color:'#fff',border:'none'}} onClick={async()=>{try{const r=await fetch(API+'/admin/release-stale?hours=0.25',{method:'POST',headers:{'x-admin-key':adminKey}});const d=await r.json();alert(`Cleaned ${d.agents} stale agents, released ${d.released} tasks`);}catch(e){alert('Failed: '+e.message);}}}>Clean Stale</button>}
+          {adminKey&&allAgents.filter(a=>a.status==='active').length>trueActive&&<button className="ag-tab" style={{background:'#e67e22',color:'#fff',border:'none'}} onClick={async()=>{try{const r=await fetch(API+'/admin/release-stale?hours=0.5',{method:'POST',headers:{'x-admin-key':adminKey}});const d=await r.json();alert(`Cleaned ${d.agents} stale agents, released ${d.released} tasks`);}catch(e){alert('Failed: '+e.message);}}}>Clean Stale</button>}
         </div></div>
         {allAgents.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents yet. Deploy from Overview.</div></div></div>:
         <div className="ag-grid">{(agentView==='active'?allAgents.filter(a=>a.status==='active'):allAgents).map(a=>{
           const dv=divs.find(d=>d.id===a.divisionId);
           const ago=a.registeredAt?Math.round((Date.now()-new Date(a.registeredAt))/60000):0;
           const hbAgo=a.lastHeartbeat?Math.round((Date.now()-new Date(a.lastHeartbeat))/60000):999;
-          const isStale=a.status==='active'&&hbAgo>15;
+          const isStale=a.status==='active'&&hbAgo>30;
           return<div key={a.id} className="ag" onClick={()=>loadProfile(a.id)} style={isStale?{opacity:0.55,borderLeft:'3px solid #e67e22'}:{}}>
             <div className="ag-top">
               <span className="ag-id">{a.id}</span>

@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
-const HEARTBEAT_TIMEOUT = 900000; // 15 minutes — agents not seen in 15min are marked disconnected
+const HEARTBEAT_TIMEOUT = 1800000; // 30 minutes — agents not seen in 30min are marked disconnected
 const QC_RATE = 0.3; // 30% of assignments are QC reviews // 60 min — agents spend long periods researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
