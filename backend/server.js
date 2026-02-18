@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
-const HEARTBEAT_TIMEOUT = 3600000;
+const HEARTBEAT_TIMEOUT = 900000; // 15 minutes — agents not seen in 15min are marked disconnected
 const QC_RATE = 0.3; // 30% of assignments are QC reviews // 60 min — agents spend long periods researching
 const SKILL_PATH = path.join(__dirname, 'SKILL.md');
 
@@ -43,8 +43,9 @@ async function startup() {
   console.log(`   Dashboard: http://localhost:${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/api/v1/health\n`);
 
-  // Heartbeat monitor disabled — agents stay active until explicit disconnect
-  // Stale tasks can be released manually via POST /api/v1/admin/release-stale
+  // Heartbeat monitor — auto-disconnect stale agents every 60s
+  setInterval(checkHeartbeats, 60000);
+  console.log(`   Heartbeat monitor: enabled (${HEARTBEAT_TIMEOUT/60000}min timeout)`);
 }
 
 // ============================================================

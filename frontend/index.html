@@ -231,8 +231,6 @@ function App(){
   const[genMsg,setGenMsg]=useState('');
   const[agentProfile,setAgentProfile]=useState(null);
   const[agentView,setAgentView]=useState('all'); // 'all' or 'active'
-  const[adminKey,setAdminKey]=useState('');
-  const[selDiv,setSelDiv]=useState('');
   const le=useRef(null);
 
   const poll=useCallback(async()=>{
@@ -258,6 +256,7 @@ function App(){
   const allM=data.allMissions||[];
   const papers=data.papers||[];
   const agents=data.agents||[];
+  const trueActive=agents.filter(a=>a.status==='active'&&a.lastHeartbeat&&(Date.now()-new Date(a.lastHeartbeat))<900000).length;
   const allAgents=data.allAgents||[];
   const qc=data.qcStats||{pending:0,passed:0,flagged:0,rejected:0,total:0};
   const pct=parseFloat(s.progress)||0;
@@ -271,6 +270,9 @@ function App(){
   const doExport=async(fmt)=>{
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
   };
+
+  const[adminKey,setAdminKey]=useState('');
+  const[selDiv,setSelDiv]=useState('');
 
   const doGenPaper=async(type,divId)=>{
     if(!adminKey){setGenMsg('❌ Enter admin key first');return;}
@@ -287,10 +289,10 @@ function App(){
   const agList=agents;
 
   return<div>
-    <div className="topbar"><div className="topbar-l"><span><span className="topbar-dot" style={{background:con?'#27ae60':'#c0392b'}}/>{con?'Connected — polling live':'Connecting…'}</span><a href="https://github.com/openclawprison/research-swarm" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:16}}>GitHub</a><a href="https://x.com/ClawDevLord" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:10}}>@ClawDevLord</a></div><div className="topbar-r"><span>{s.activeAgents||0} agents</span><span>{(s.totalPapers||0).toLocaleString()} papers</span><span>{(s.totalFindings||0).toLocaleString()} findings</span><span>{(s.tasksTotal||0).toLocaleString()} tasks</span></div></div>
+    <div className="topbar"><div className="topbar-l"><span><span className="topbar-dot" style={{background:con?'#27ae60':'#c0392b'}}/>{con?'Connected — polling live':'Connecting…'}</span><a href="https://github.com/openclawprison/research-swarm" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:16}}>GitHub</a><a href="https://x.com/ClawDevLord" target="_blank" rel="noopener" style={{color:'rgba(255,255,255,.65)',textDecoration:'none',marginLeft:10}}>@ClawDevLord</a></div><div className="topbar-r"><span>{trueActive} agents</span><span>{(s.totalPapers||0).toLocaleString()} papers</span><span>{(s.totalFindings||0).toLocaleString()} findings</span><span>{(s.tasksTotal||0).toLocaleString()} tasks</span></div></div>
     <div className="hdr"><div className="hdr-in">
       <div className="brand"><div className="brand-m"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5" fill="#fff"/><circle cx="6" cy="7" r="1.5" fill="#fff" opacity=".8"/><circle cx="18" cy="7" r="1.5" fill="#fff" opacity=".8"/><circle cx="5" cy="15" r="1.5" fill="#fff" opacity=".8"/><circle cx="19" cy="15" r="1.5" fill="#fff" opacity=".8"/><circle cx="9" cy="20" r="1.5" fill="#fff" opacity=".8"/><circle cx="15" cy="20" r="1.5" fill="#fff" opacity=".8"/><line x1="12" y1="12" x2="6" y2="7" stroke="#fff" strokeWidth="1" opacity=".5"/><line x1="12" y1="12" x2="18" y2="7" stroke="#fff" strokeWidth="1" opacity=".5"/><line x1="12" y1="12" x2="5" y2="15" stroke="#fff" strokeWidth="1" opacity=".5"/><line x1="12" y1="12" x2="19" y2="15" stroke="#fff" strokeWidth="1" opacity=".5"/><line x1="12" y1="12" x2="9" y2="20" stroke="#fff" strokeWidth="1" opacity=".5"/><line x1="12" y1="12" x2="15" y2="20" stroke="#fff" strokeWidth="1" opacity=".5"/></svg></div><div><h1>Research Swarm</h1><p>Multi-Agent Research Platform</p></div></div>
-      <div className="hstats"><div><div className="hs-v" style={{color:'#2c5f8a'}}>{s.activeAgents||0}</div><div className="hs-l">Agents</div></div><div><div className="hs-v" style={{color:'#b8860b'}}>{(s.totalFindings||0).toLocaleString()}</div><div className="hs-l">Findings</div></div><div><div className="hs-v" style={{color:'#1e7a54'}}>{(s.tasksTotal||0).toLocaleString()}</div><div className="hs-l">Total Tasks</div></div></div>
+      <div className="hstats"><div><div className="hs-v" style={{color:'#2c5f8a'}}>{trueActive}</div><div className="hs-l">Agents</div></div><div><div className="hs-v" style={{color:'#b8860b'}}>{(s.totalFindings||0).toLocaleString()}</div><div className="hs-l">Findings</div></div><div><div className="hs-v" style={{color:'#1e7a54'}}>{(s.tasksTotal||0).toLocaleString()}</div><div className="hs-l">Total Tasks</div></div></div>
     </div></div>
 
     {m&&<div className="msn"><div className="msn-in">
@@ -308,7 +310,7 @@ function App(){
 
     <div className={`lay${tab==='papers'||tab==='missions'||tab==='leaderboard'?' wide':''}`}><div style={{minWidth:0}}>
       {tab==='overview'&&<><div className="mets">
-        <div className="met"><div className="met-v" style={{color:'#2c5f8a'}}>{s.activeAgents||0}</div><div className="met-l">Active Agents</div></div>
+        <div className="met"><div className="met-v" style={{color:'#2c5f8a'}}>{trueActive}</div><div className="met-l">Active Agents</div></div>
         <div className="met"><div className="met-v" style={{color:'#b8860b'}}>{(s.totalPapers||0).toLocaleString()}</div><div className="met-l">Papers Analyzed</div></div>
         <div className="met"><div className="met-v" style={{color:'#1e7a54'}}>{(s.totalFindings||0).toLocaleString()}</div><div className="met-l">Findings</div></div>
         <div className="met"><div className="met-v" style={{color:'#c0392b'}}>{pct}%</div><div className="met-l">Progress</div></div>
@@ -390,25 +392,28 @@ function App(){
         </div>
       </div>:<div>
         <div className="pnl-h"><div className="pnl-t">Agent Roster</div><div className="pnl-s" style={{display:'flex',gap:8,alignItems:'center'}}>
-          {allAgents.filter(a=>a.status==='active').length} active / {allAgents.length} total
+          {allAgents.filter(a=>a.status==='active').length} active ({trueActive} working) / {allAgents.length} total
           <button className={`ag-tab ${agentView==='all'?'active':''}`} onClick={()=>setAgentView('all')}>All</button>
           <button className={`ag-tab ${agentView==='active'?'active':''}`} onClick={()=>setAgentView('active')}>Active</button>
+          {adminKey&&allAgents.filter(a=>a.status==='active').length>trueActive&&<button className="ag-tab" style={{background:'#e67e22',color:'#fff',border:'none'}} onClick={async()=>{try{const r=await fetch(API+'/admin/release-stale?hours=0.25',{method:'POST',headers:{'x-admin-key':adminKey}});const d=await r.json();alert(`Cleaned ${d.agents} stale agents, released ${d.released} tasks`);}catch(e){alert('Failed: '+e.message);}}}>Clean Stale</button>}
         </div></div>
         {allAgents.length===0?<div className="pnl-b"><div className="empty"><div className="empty-i">🤖</div><div className="empty-t">No agents yet. Deploy from Overview.</div></div></div>:
         <div className="ag-grid">{(agentView==='active'?allAgents.filter(a=>a.status==='active'):allAgents).map(a=>{
           const dv=divs.find(d=>d.id===a.divisionId);
           const ago=a.registeredAt?Math.round((Date.now()-new Date(a.registeredAt))/60000):0;
-          return<div key={a.id} className="ag" onClick={()=>loadProfile(a.id)}>
+          const hbAgo=a.lastHeartbeat?Math.round((Date.now()-new Date(a.lastHeartbeat))/60000):999;
+          const isStale=a.status==='active'&&hbAgo>15;
+          return<div key={a.id} className="ag" onClick={()=>loadProfile(a.id)} style={isStale?{opacity:0.55,borderLeft:'3px solid #e67e22'}:{}}>
             <div className="ag-top">
               <span className="ag-id">{a.id}</span>
-              <span className={`ag-st ${a.status}`}>{a.flagged&&<span style={{color:'#a83232',marginRight:4,fontWeight:700}}>!</span>}{a.status==='active'&&<span className="p"/>}{a.status}</span>
+              <span className={`ag-st ${isStale?'stale':a.status}`}>{a.flagged&&<span style={{color:'#a83232',marginRight:4,fontWeight:700}}>!</span>}{isStale?<span style={{color:'#e67e22'}}>⏸ idle</span>:<>{a.status==='active'&&<span className="p"/>}{a.status}</>}</span>
             </div>
             <div className="ag-d">{dv?dv.name:a.divisionId||'—'}</div>
             <div className="ag-stat-row">
               <span><b>{a.tasksCompleted||0}</b> tasks</span>
               <span><b>{a.papersAnalyzed||0}</b> papers</span>
               <span style={{color:a.flagged?'#a83232':a.qualityScore>=0.8?'#1a7a3a':'#b8860b'}}>Q: <b>{((a.qualityScore||1)*100).toFixed(0)}%</b></span>
-              <span>{ago<60?ago+'m':Math.round(ago/60)+'h'} ago</span>
+              <span title={`Last heartbeat: ${hbAgo}m ago`}>{isStale?<span style={{color:'#e67e22'}}>{hbAgo<60?hbAgo+'m':Math.round(hbAgo/60)+'h'} idle</span>:ago<60?ago+'m':Math.round(ago/60)+'h'}</span>
             </div>
           </div>;})}</div>}
       </div>}</div>}
@@ -524,7 +529,7 @@ function App(){
 
     {tab!=='papers'&&tab!=='missions'&&<div className="sb">
       <div className="pnl" style={{flex:1,display:'flex',flexDirection:'column'}}>
-        <div className="pnl-h"><div className="pnl-t">{(s.activeAgents||0)>0&&<span style={{width:6,height:6,borderRadius:'50%',background:'var(--g)',animation:'pulse 2s infinite',display:'inline-block',marginRight:4}}/>}Activity Feed</div><div className="pnl-s">{activity.length}</div></div>
+        <div className="pnl-h"><div className="pnl-t">{trueActive>0&&<span style={{width:6,height:6,borderRadius:'50%',background:'var(--g)',animation:'pulse 2s infinite',display:'inline-block',marginRight:4}}/>}Activity Feed</div><div className="pnl-s">{activity.length}</div></div>
         <div className="log" style={{flex:1}}>{activity.length===0?<div style={{padding:16,fontSize:12,color:'var(--t4)'}}>Waiting for agents…</div>:
           activity.map((l,i)=><div key={i} className="le"><span className="lt">{new Date(l.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span><span className={`lm l-${l.type}`}>{l.msg}</span></div>)}<div ref={le}/></div>
       </div>
