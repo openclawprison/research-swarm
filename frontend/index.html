@@ -270,12 +270,15 @@ function App(){
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
   };
 
+  const[adminKey,setAdminKey]=useState(localStorage.getItem('rs-admin-key')||'');
+
   const doGenPaper=async(type,divId)=>{
+    if(!adminKey){setGenMsg('❌ Enter admin key first');return;}
     setGenMsg('Generating…');
     try{
-      const r=await fetch(API+'/papers/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({missionId:m?.id,divisionId:divId,type})});
+      const r=await fetch(API+'/papers/generate',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':adminKey},body:JSON.stringify({missionId:m?.id,divisionId:divId,type})});
       const d=await r.json();
-      if(d.paperId)setGenMsg(`✅ Paper generated: ${d.findingsCount} findings, ${d.citationsCount} citations`);
+      if(d.paperId){setGenMsg(`✅ Paper generated: ${d.findingsCount} findings, ${d.citationsCount} citations`);localStorage.setItem('rs-admin-key',adminKey);}
       else setGenMsg(`❌ ${d.error}`);
     }catch(e){setGenMsg('❌ Failed');}
     setTimeout(()=>{setGenMsg('');poll();},3000);
@@ -473,7 +476,19 @@ function App(){
         </div>:null;})()}
       </div>}
 
-      {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s">{papers.length} papers</div></div><div className="pnl-b">
+      {tab==='papers'&&<><div className="pnl"><div className="pnl-h"><div className="pnl-t">Research Papers</div><div className="pnl-s">{papers.length} papers</div></div>
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--bl)',background:'#f8f9fa'}}>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <input type="password" placeholder="Admin Key" value={adminKey} onChange={e=>{setAdminKey(e.target.value)}} style={{padding:'4px 8px',border:'1px solid var(--bl)',borderRadius:4,fontFamily:'var(--mono)',fontSize:11,width:160}}/>
+            <button onClick={()=>doGenPaper('comprehensive')} style={{padding:'4px 10px',background:'var(--bl2)',color:'#fff',border:'none',borderRadius:4,fontSize:11,cursor:'pointer'}}>Generate Comprehensive</button>
+            <select id="divSelect" style={{padding:'4px 8px',border:'1px solid var(--bl)',borderRadius:4,fontSize:11}}>
+              {divs.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <button onClick={()=>doGenPaper('division',document.getElementById('divSelect').value)} style={{padding:'4px 10px',background:'var(--bl2)',color:'#fff',border:'none',borderRadius:4,fontSize:11,cursor:'pointer'}}>Generate Division</button>
+            {genMsg&&<span style={{fontSize:11,fontFamily:'var(--mono)'}}>{genMsg}</span>}
+          </div>
+        </div>
+        <div className="pnl-b">
         {papers.length===0?<div className="empty"><div className="empty-i">📋</div><div className="empty-t">No papers generated yet. Papers are compiled by the platform admin once sufficient findings are collected.</div></div>:
         papers.map(p=><div key={p.id} className="paper-card" onClick={()=>window.open(`${API}/papers/${p.id}/export`,'_blank')}>
           <h3>{p.title}</h3><p>{p.type==='comprehensive'?'Comprehensive Review':'Division Paper'} · {p.division!=='all'?p.division+' · ':''}{new Date(p.generatedAt).toLocaleDateString()}</p>
