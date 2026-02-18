@@ -270,7 +270,8 @@ function App(){
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
   };
 
-  const[adminKey,setAdminKey]=useState(localStorage.getItem('rs-admin-key')||'');
+  const[adminKey,setAdminKey]=useState('');
+  const[selDiv,setSelDiv]=useState('');
 
   const doGenPaper=async(type,divId)=>{
     if(!adminKey){setGenMsg('❌ Enter admin key first');return;}
@@ -278,7 +279,7 @@ function App(){
     try{
       const r=await fetch(API+'/papers/generate',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':adminKey},body:JSON.stringify({missionId:m?.id,divisionId:divId,type})});
       const d=await r.json();
-      if(d.paperId){setGenMsg(`✅ Paper generated: ${d.findingsCount} findings, ${d.citationsCount} citations`);localStorage.setItem('rs-admin-key',adminKey);}
+      if(d.paperId)setGenMsg(`✅ Paper generated: ${d.findingsCount} findings, ${d.citationsCount} citations`);
       else setGenMsg(`❌ ${d.error}`);
     }catch(e){setGenMsg('❌ Failed');}
     setTimeout(()=>{setGenMsg('');poll();},3000);
@@ -481,10 +482,10 @@ function App(){
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
             <input type="password" placeholder="Admin Key" value={adminKey} onChange={e=>{setAdminKey(e.target.value)}} style={{padding:'4px 8px',border:'1px solid var(--bl)',borderRadius:4,fontFamily:'var(--mono)',fontSize:11,width:160}}/>
             <button onClick={()=>doGenPaper('comprehensive')} style={{padding:'4px 10px',background:'var(--bl2)',color:'#fff',border:'none',borderRadius:4,fontSize:11,cursor:'pointer'}}>Generate Comprehensive</button>
-            <select id="divSelect" style={{padding:'4px 8px',border:'1px solid var(--bl)',borderRadius:4,fontSize:11}}>
+            <select value={selDiv} onChange={e=>setSelDiv(e.target.value)} style={{padding:'4px 8px',border:'1px solid var(--bl)',borderRadius:4,fontSize:11}}>
               {divs.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
-            <button onClick={()=>doGenPaper('division',document.getElementById('divSelect').value)} style={{padding:'4px 10px',background:'var(--bl2)',color:'#fff',border:'none',borderRadius:4,fontSize:11,cursor:'pointer'}}>Generate Division</button>
+            <button onClick={()=>doGenPaper('division',selDiv||divs[0]?.id)} style={{padding:'4px 10px',background:'var(--bl2)',color:'#fff',border:'none',borderRadius:4,fontSize:11,cursor:'pointer'}}>Generate Division</button>
             {genMsg&&<span style={{fontSize:11,fontFamily:'var(--mono)'}}>{genMsg}</span>}
           </div>
         </div>
