@@ -231,6 +231,8 @@ function App(){
   const[genMsg,setGenMsg]=useState('');
   const[agentProfile,setAgentProfile]=useState(null);
   const[agentView,setAgentView]=useState('all'); // 'all' or 'active'
+  const[adminKey,setAdminKey]=useState('');
+  const[selDiv,setSelDiv]=useState('');
   const le=useRef(null);
 
   const poll=useCallback(async()=>{
@@ -269,9 +271,6 @@ function App(){
   const doExport=async(fmt)=>{
     window.open(`${API}/export/findings?mission=${m?.id||''}&format=${fmt}`,'_blank');
   };
-
-  const[adminKey,setAdminKey]=useState('');
-  const[selDiv,setSelDiv]=useState('');
 
   const doGenPaper=async(type,divId)=>{
     if(!adminKey){setGenMsg('❌ Enter admin key first');return;}
